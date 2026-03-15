@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/samuellawrentz/kron/compare/kron-v0.3.0...kron-v0.4.0) (2026-03-15)
+
+
+### Features
+
+* add alerting, environment snapshots, and dry-run testing ([956ee15](https://github.com/samuellawrentz/kron/commit/956ee15c9f5440afad7e0c79d653e17c58edd3ba))
+
 ## [0.3.0](https://github.com/samuellawrentz/kron/compare/kron-v0.2.0...kron-v0.3.0) (2026-03-15)
 
 
