@@ -2,38 +2,13 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
 
 permissions:
   contents: write
 
 jobs:
-  check-version:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag_exists: ${{ steps.check_tag.outputs.exists }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Extract version from Cargo.toml
-        id: version
-        run: |
-          version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "version=v${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Check if tag already exists
-        id: check_tag
-        run: |
-          if git ls-remote --tags origin | grep -q "refs/tags/v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')$"; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
   build:
-    needs: check-version
-    if: needs.check-version.outputs.tag_exists == 'false'
     strategy:
       matrix:
         include:
@@ -85,7 +60,7 @@ jobs:
             ${{ matrix.name }}.tar.gz.sha256
 
   release:
-    needs: [check-version, build]
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -96,14 +71,7 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create release
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          version="${{ needs.check-version.outputs.version }}"
-          git tag "$version"
-          git push origin "$version"
-          gh release create "$version" \
-            --title "kron $version" \
-            --generate-notes \
-            artifacts/*
+        run: gh release upload "${{ github.ref_name }}" artifacts/* --clobber
