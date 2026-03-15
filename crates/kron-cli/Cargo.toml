@@ -1,0 +1,22 @@
+[package]
+name = "kron"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cron, but it actually tells you what happened"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+kron-core = { path = "../kron-core" }
+kron-store = { path = "../kron-store" }
+croner = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }

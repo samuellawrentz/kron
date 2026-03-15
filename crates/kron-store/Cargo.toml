@@ -1,0 +1,17 @@
+[package]
+name = "kron-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SQLite storage layer for kron"
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+rusqlite = { workspace = true }
+rusqlite_migration = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
