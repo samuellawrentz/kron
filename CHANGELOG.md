@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/samuellawrentz/kron/compare/kron-v0.5.0...kron-v0.5.1) (2026-03-15)
+
+
+### Bug Fixes
+
+* add actions:write permission for workflow re-trigger after auto-merge ([408e5cb](https://github.com/samuellawrentz/kron/commit/408e5cb835f061812757ca0bda159cade830862c))
+
 ## [0.5.0](https://github.com/samuellawrentz/kron/compare/kron-v0.4.0...kron-v0.5.0) (2026-03-15)
 
 
