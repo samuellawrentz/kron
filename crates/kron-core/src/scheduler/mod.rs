@@ -79,40 +79,43 @@ impl Scheduler {
                 continue;
             }
 
-            // Issue 2: use UNIX_EPOCH as default so the first tick always evaluates
+            // Use job ID as the key for last_check and running_jobs tracking
             let last = last_check
-                .get(&def.name)
+                .get(&def.id)
                 .copied()
                 .unwrap_or(chrono::DateTime::<Utc>::UNIX_EPOCH);
             let last_minute = last.format("%Y-%m-%d %H:%M").to_string();
 
             if now_minute != last_minute {
-                // Issue 12: skip if job is already running
+                // Skip if job is already running
                 {
                     let running = self.running_jobs.lock().unwrap_or_else(|e| {
                         warn!("running_jobs mutex was poisoned, recovering");
                         e.into_inner()
                     });
-                    if running.contains(&def.name) {
-                        info!(job = %def.name, "job already running, skipping tick");
-                        last_check.insert(def.name.clone(), now);
+                    if running.contains(&def.id) {
+                        let job_label = def.name.as_deref().unwrap_or(&def.id);
+                        info!(job = %job_label, "job already running, skipping tick");
+                        last_check.insert(def.id.clone(), now);
                         continue;
                     }
                 }
 
                 match cached.cron.is_time_matching(&now) {
                     Ok(true) => {
-                        info!(job = %def.name, "triggering job");
+                        let job_label = def.name.as_deref().unwrap_or(&def.id);
+                        info!(job = %job_label, "triggering job");
                         self.spawn_job(def);
                     }
                     Ok(false) => {}
                     Err(e) => {
-                        warn!(job = %def.name, "schedule match error: {e}");
+                        let job_label = def.name.as_deref().unwrap_or(&def.id);
+                        warn!(job = %job_label, "schedule match error: {e}");
                     }
                 }
             }
 
-            last_check.insert(def.name.clone(), now);
+            last_check.insert(def.id.clone(), now);
         }
     }
 
@@ -120,42 +123,42 @@ impl Scheduler {
     fn spawn_job(&self, def: &JobDefinition) {
         let store = Arc::clone(&self.store);
         let running_jobs = Arc::clone(&self.running_jobs);
-        let name = def.name.clone();
+        let job_id = def.id.clone();
+        // Use name for display; fall back to id
+        let job_display_name = def.name.clone().unwrap_or_else(|| def.id.clone());
         let command = def.command.clone();
         let working_dir = def.working_dir.clone();
         let timeout = def.timeout.as_deref().and_then(parse_duration);
 
-        let name_clone = name.clone();
-        let span_name = name.clone();
+        let job_id_clone = job_id.clone();
+        let span_name = job_display_name.clone();
         tokio::spawn(
             async move {
-                // Mark job as running (Issue 12)
+                // Mark job as running by ID
                 {
                     let mut running = running_jobs.lock().unwrap_or_else(|e| {
                         warn!("running_jobs mutex was poisoned, recovering");
                         e.into_inner()
                     });
-                    running.insert(name.clone());
+                    running.insert(job_id.clone());
                 }
 
                 // Ensure we remove the job from running_jobs when done
                 let _guard = RunningGuard {
                     running_jobs: Arc::clone(&running_jobs),
-                    name: name.clone(),
+                    name: job_id.clone(),
                 };
 
-                // job_id is the job name (TOML is source of truth, no jobs table)
-                let job_id = name_clone.clone();
                 let run_id = Uuid::new_v4().to_string();
                 let started_at = Utc::now();
 
-                // Issue 1 + 6: insert_run via spawn_blocking with poison warning
+                // Insert run record — job_id is the short ID; job_name is the display name
                 {
                     let s = Arc::clone(&store);
                     let run = RunRecord {
                         id: run_id.clone(),
-                        job_id: job_id.clone(),
-                        job_name: name.clone(),
+                        job_id: job_id_clone.clone(),
+                        job_name: job_display_name.clone(),
                         started_at,
                         finished_at: None,
                         exit_code: None,
@@ -178,7 +181,7 @@ impl Scheduler {
                     }
                 }
 
-                // Execute with optional timeout (Issue 10)
+                // Execute with optional timeout
                 let result =
                     runner::execute_command(&command, working_dir.as_deref(), timeout).await;
 
@@ -204,7 +207,7 @@ impl Scheduler {
                         )
                     }
                     Err(CoreError::Timeout(dur)) => {
-                        warn!(job = %name, timeout = ?dur, "job timed out");
+                        warn!(job = %job_display_name, timeout = ?dur, "job timed out");
                         (
                             Utc::now(),
                             None,
@@ -225,13 +228,13 @@ impl Scheduler {
                     }
                 };
 
-                // Issue 1 + 6: update_run via spawn_blocking with poison warning
+                // Update run record
                 {
                     let s = Arc::clone(&store);
                     let run = RunRecord {
                         id: run_id,
-                        job_id,
-                        job_name: name.clone(),
+                        job_id: job_id_clone,
+                        job_name: job_display_name.clone(),
                         started_at,
                         finished_at: Some(finished_at),
                         exit_code,
@@ -259,7 +262,7 @@ impl Scheduler {
     }
 }
 
-/// RAII guard that removes a job name from `running_jobs` when dropped.
+/// RAII guard that removes a job ID from `running_jobs` when dropped.
 struct RunningGuard {
     running_jobs: Arc<Mutex<HashSet<String>>>,
     name: String,
@@ -306,9 +309,10 @@ fn reload_jobs() -> Vec<CachedJob> {
         Ok(configs) => {
             for config in configs {
                 let def = config.job;
+                let job_label = def.name.as_deref().unwrap_or(&def.id).to_string();
                 match Cron::new(&def.schedule).parse() {
                     Ok(cron) => cache.push(CachedJob { def, cron }),
-                    Err(e) => warn!(job = %def.name, "invalid schedule, skipping: {e}"),
+                    Err(e) => warn!(job = %job_label, "invalid schedule, skipping: {e}"),
                 }
             }
         }

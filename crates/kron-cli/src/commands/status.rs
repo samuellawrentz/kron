@@ -13,14 +13,15 @@ pub fn execute() -> Result<()> {
     let store = Store::open(&config::db_path()).context("failed to open database")?;
 
     println!(
-        "{:<20} {:<10} {:<12} {:<20}",
-        "NAME", "STATUS", "EXIT CODE", "LAST RUN"
+        "{:<10} {:<20} {:<10} {:<12} {:<20}",
+        "ID", "NAME", "STATUS", "EXIT CODE", "LAST RUN"
     );
-    println!("{}", "-".repeat(65));
+    println!("{}", "-".repeat(75));
 
     for job_config in &jobs {
         let job = &job_config.job;
-        let last_run = store.get_last_run(&job.name)?;
+        let name_display = job.name.as_deref().unwrap_or("-");
+        let last_run = store.get_last_run(&job.id)?;
         match last_run {
             Some(run) => {
                 let duration = run.finished_at.map_or_else(
@@ -32,15 +33,19 @@ pub fn execute() -> Result<()> {
                     .map_or_else(|| "-".to_string(), |c| c.to_string());
 
                 println!(
-                    "{:<20} {:<10} {:<12} {} ({duration})",
-                    job.name,
+                    "{:<10} {:<20} {:<10} {:<12} {} ({duration})",
+                    job.id,
+                    name_display,
                     run.status.as_str(),
                     exit_code,
                     run.started_at.format("%Y-%m-%d %H:%M:%S"),
                 );
             }
             None => {
-                println!("{:<20} {:<10} {:<12} no runs yet", job.name, "never", "-");
+                println!(
+                    "{:<10} {:<20} {:<10} {:<12} no runs yet",
+                    job.id, name_display, "never", "-"
+                );
             }
         }
     }

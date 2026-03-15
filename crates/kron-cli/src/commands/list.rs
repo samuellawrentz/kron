@@ -9,13 +9,18 @@ pub fn execute() -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<20} {:<8} {:<25} COMMAND", "NAME", "ENABLED", "SCHEDULE");
-    println!("{}", "-".repeat(75));
+    println!(
+        "{:<10} {:<20} {:<8} {:<25} COMMAND",
+        "ID", "NAME", "ENABLED", "SCHEDULE"
+    );
+    println!("{}", "-".repeat(85));
     for job_config in &jobs {
         let job = &job_config.job;
+        let name_display = job.name.as_deref().unwrap_or("-");
         println!(
-            "{:<20} {:<8} {:<25} {}",
-            job.name,
+            "{:<10} {:<20} {:<8} {:<25} {}",
+            job.id,
+            name_display,
             if job.enabled { "yes" } else { "no" },
             job.schedule,
             job.command,

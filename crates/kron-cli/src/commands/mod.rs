@@ -19,7 +19,7 @@ pub enum Command {
         /// Command to execute
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
-        /// Job name (defaults to command basename)
+        /// Optional human-friendly job name
         #[arg(short, long)]
         name: Option<String>,
         /// Working directory
@@ -32,7 +32,7 @@ pub enum Command {
     Status,
     /// Show run history for a job
     History {
-        /// Job name
+        /// Job ID or name
         job: String,
         /// Number of runs to show
         #[arg(short = 'n', long, default_value = "10")]
@@ -40,7 +40,7 @@ pub enum Command {
     },
     /// Show logs from a job run
     Logs {
-        /// Job name
+        /// Job ID or name
         job: String,
         /// Run number (1 = most recent)
         #[arg(long, default_value = "1")]
@@ -48,16 +48,20 @@ pub enum Command {
     },
     /// Force-run a job immediately
     Run {
-        /// Job name
+        /// Job ID or name
         job: String,
     },
     /// Remove a job
     Remove {
-        /// Job name
+        /// Job ID or name
         job: String,
     },
     /// Start the scheduler daemon
-    Daemon,
+    Daemon {
+        /// Run in foreground (default: background)
+        #[arg(short, long)]
+        foreground: bool,
+    },
 }
 
 pub async fn run(cmd: Command) -> Result<()> {
@@ -74,6 +78,6 @@ pub async fn run(cmd: Command) -> Result<()> {
         Command::Logs { job, run } => logs::execute(&job, run),
         Command::Run { job } => run_job::execute(&job).await,
         Command::Remove { job } => remove::execute(&job),
-        Command::Daemon => daemon::execute().await,
+        Command::Daemon { foreground } => daemon::execute(foreground).await,
     }
 }

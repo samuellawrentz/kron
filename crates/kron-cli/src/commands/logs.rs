@@ -2,20 +2,21 @@ use anyhow::{Context, Result, bail};
 use kron_core::config;
 use kron_store::Store;
 
-pub fn execute(job_name: &str, run_number: usize) -> Result<()> {
-    // Verify job exists via TOML config (single source of truth)
-    let jobs = config::load_all_jobs().context("failed to load jobs")?;
-    if !jobs.iter().any(|j| j.job.name == job_name) {
-        bail!("job '{job_name}' not found");
-    }
+pub fn execute(query: &str, run_number: usize) -> Result<()> {
+    // Resolve job by ID or name
+    let job_config = config::find_job(query)
+        .context("failed to load jobs")?
+        .with_context(|| format!("job '{query}' not found"))?;
+    let job = &job_config.job;
 
     let store = Store::open(&config::db_path()).context("failed to open database")?;
     // Fetch up to run_number runs (DESC order). Index run_number-1 gives the requested run.
-    // TODO: could be optimized with OFFSET for large run counts
-    let runs = store.list_runs(job_name, run_number)?;
+    let runs = store.list_runs(&job.id, run_number)?;
+
+    let display = job.name.as_deref().unwrap_or(&job.id);
 
     if runs.is_empty() {
-        bail!("no runs recorded for '{job_name}'");
+        bail!("no runs recorded for '{display}'");
     }
 
     // runs are in DESC order (most recent first). run_number=1 means most recent = index 0
@@ -31,7 +32,7 @@ pub fn execute(job_name: &str, run_number: usize) -> Result<()> {
         .map_or_else(|| "-".to_string(), |c| c.to_string());
 
     println!(
-        "=== Job: {job_name} | Run #{run_number} | {} ===",
+        "=== Job: {display} | Run #{run_number} | {} ===",
         run.started_at.format("%Y-%m-%d %H:%M:%S")
     );
     println!("Status: {} | Exit code: {exit_code}", run.status.as_str());

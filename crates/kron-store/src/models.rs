@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone)]
 pub struct JobRecord {
     pub id: String,
-    pub name: String,
+    pub name: Option<String>,
     pub command: String,
     pub schedule: String,
     pub working_dir: Option<String>,

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use croner::Cron;
 
-use kron_core::config::{self, JobConfig, JobDefinition, validate_job_name};
+use kron_core::config::{self, JobConfig, JobDefinition, generate_short_id, validate_job_name};
 
 /// Resolve a schedule string into a valid cron expression.
 ///
@@ -59,26 +59,20 @@ pub fn execute(
     let (resolved_schedule, original_english) = resolve_schedule(&schedule)?;
 
     let command_str = command.join(" ");
-    let job_name = name.unwrap_or_else(|| {
-        // Derive name from command: take basename of first word, sanitize
-        command_str
-            .split_whitespace()
-            .next()
-            .unwrap_or("job")
-            .rsplit('/')
-            .next()
-            .unwrap_or("job")
-            .replace('.', "-")
-    });
 
-    // Validate name before saving (prevents path traversal)
-    validate_job_name(&job_name)?;
+    // Validate name if provided
+    if let Some(ref n) = name {
+        validate_job_name(n)?;
+    }
+
+    let job_id = generate_short_id();
 
     // Save TOML config file — TOML is the single source of truth for job definitions.
     // Always store the resolved cron expression, not the English input.
     let job_config = JobConfig {
         job: JobDefinition {
-            name: job_name.clone(),
+            id: job_id.clone(),
+            name: name.clone(),
             command: command_str.clone(),
             schedule: resolved_schedule.clone(),
             working_dir: working_dir.clone(),
@@ -88,7 +82,10 @@ pub fn execute(
     };
     let path = config::save_job(&job_config).context("failed to save job config")?;
 
-    println!("Added job '{job_name}'");
+    println!("Added job {job_id}");
+    if let Some(ref n) = name {
+        println!("  Name: {n}");
+    }
     println!("  Config: {}", path.display());
     if let Some(english) = original_english {
         println!("  Schedule: {resolved_schedule} (from \"{english}\")");

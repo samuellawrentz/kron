@@ -5,28 +5,27 @@ use uuid::Uuid;
 use kron_core::{config, runner};
 use kron_store::{RunRecord, RunStatus, Store};
 
-pub async fn execute(job_name: &str) -> Result<()> {
-    // Load job definition from TOML (single source of truth)
-    let jobs = config::load_all_jobs().context("failed to load jobs")?;
-    let job_config = jobs
-        .into_iter()
-        .find(|j| j.job.name == job_name)
-        .map(|j| j.job);
+pub async fn execute(query: &str) -> Result<()> {
+    // Resolve job by ID or name
+    let job_config = config::find_job(query)
+        .context("failed to load jobs")?
+        .map(|c| c.job);
     let Some(job) = job_config else {
-        bail!("job '{job_name}' not found")
+        bail!("job '{query}' not found")
     };
 
-    println!("Running '{}': {}", job.name, job.command);
+    let job_display = job.name.as_deref().unwrap_or(&job.id);
+    println!("Running '{}': {}", job_display, job.command);
 
     let store = Store::open(&config::db_path()).context("failed to open database")?;
     let run_id = Uuid::new_v4().to_string();
     let started_at = Utc::now();
 
-    // Record run start — job_id is the job name since TOML jobs have no separate UUID
+    // Record run start — job_id is the short ID; job_name is the display name
     let run = RunRecord {
         id: run_id.clone(),
-        job_id: job.name.clone(),
-        job_name: job.name.clone(),
+        job_id: job.id.clone(),
+        job_name: job.name.clone().unwrap_or_else(|| job.id.clone()),
         started_at,
         finished_at: None,
         exit_code: None,
@@ -52,8 +51,8 @@ pub async fn execute(job_name: &str) -> Result<()> {
     };
     let completed_run = RunRecord {
         id: run_id,
-        job_id: job.name.clone(),
-        job_name: job.name.clone(),
+        job_id: job.id.clone(),
+        job_name: job.name.clone().unwrap_or_else(|| job.id.clone()),
         started_at,
         finished_at: Some(output.finished_at),
         exit_code: output.exit_code,

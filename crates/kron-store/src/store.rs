@@ -6,8 +6,9 @@ use rusqlite_migration::{M, Migrations};
 use crate::error::StoreError;
 use crate::models::{JobRecord, RunRecord, RunStatus};
 
-const MIGRATIONS: &[M<'static>] = &[M::up(
-    "CREATE TABLE IF NOT EXISTS jobs (
+const MIGRATIONS: &[M<'static>] = &[
+    M::up(
+        "CREATE TABLE IF NOT EXISTS jobs (
         id          TEXT PRIMARY KEY NOT NULL,
         name        TEXT UNIQUE NOT NULL,
         command     TEXT NOT NULL,
@@ -28,7 +29,23 @@ const MIGRATIONS: &[M<'static>] = &[M::up(
         status      TEXT NOT NULL DEFAULT 'running'
     );
     CREATE INDEX idx_runs_job_started ON runs(job_name, started_at DESC);",
-)];
+    ),
+    M::up(
+        "CREATE TABLE jobs_new (
+            id          TEXT PRIMARY KEY NOT NULL,
+            name        TEXT,
+            command     TEXT NOT NULL,
+            schedule    TEXT NOT NULL,
+            working_dir TEXT,
+            created_at  TEXT NOT NULL,
+            enabled     INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT INTO jobs_new SELECT id, name, command, schedule, working_dir, created_at, enabled FROM jobs;
+        DROP TABLE jobs;
+        ALTER TABLE jobs_new RENAME TO jobs;
+        CREATE INDEX IF NOT EXISTS idx_runs_job_id ON runs(job_id, started_at DESC);",
+    ),
+];
 
 pub struct Store {
     conn: Connection,
@@ -161,7 +178,7 @@ impl Store {
                 if e.code == rusqlite::ErrorCode::ConstraintViolation =>
             {
                 Err(StoreError::JobAlreadyExists {
-                    name: job.name.clone(),
+                    name: job.name.clone().unwrap_or_else(|| job.id.clone()),
                 })
             }
             Err(e) => Err(StoreError::Database(e)),
@@ -184,30 +201,63 @@ impl Store {
         Ok(jobs)
     }
 
-    pub fn get_job(&self, name: &str) -> Result<JobRecord, StoreError> {
+    /// Look up a job by its exact ID.
+    pub fn get_job_by_id(&self, id: &str) -> Result<JobRecord, StoreError> {
         let result = self.conn.query_row(
             "SELECT id, name, command, schedule, working_dir, created_at, enabled
-             FROM jobs WHERE name = ?1",
-            params![name],
+             FROM jobs WHERE id = ?1",
+            params![id],
             job_from_row,
         );
 
         match result {
             Ok(job) => Ok(job),
             Err(rusqlite::Error::QueryReturnedNoRows) => Err(StoreError::JobNotFound {
-                name: name.to_string(),
+                name: id.to_string(),
             }),
             Err(e) => Err(StoreError::Database(e)),
         }
     }
 
-    pub fn delete_job(&self, name: &str) -> Result<(), StoreError> {
+    /// Look up a job by ID first, then by name.
+    pub fn get_job(&self, query: &str) -> Result<JobRecord, StoreError> {
+        // Try by id first
+        let by_id = self.conn.query_row(
+            "SELECT id, name, command, schedule, working_dir, created_at, enabled
+             FROM jobs WHERE id = ?1",
+            params![query],
+            job_from_row,
+        );
+        match by_id {
+            Ok(job) => return Ok(job),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {}
+            Err(e) => return Err(StoreError::Database(e)),
+        }
+
+        // Then try by name
+        let by_name = self.conn.query_row(
+            "SELECT id, name, command, schedule, working_dir, created_at, enabled
+             FROM jobs WHERE name = ?1",
+            params![query],
+            job_from_row,
+        );
+        match by_name {
+            Ok(job) => Ok(job),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err(StoreError::JobNotFound {
+                name: query.to_string(),
+            }),
+            Err(e) => Err(StoreError::Database(e)),
+        }
+    }
+
+    /// Delete a job by its ID.
+    pub fn delete_job(&self, id: &str) -> Result<(), StoreError> {
         let count = self
             .conn
-            .execute("DELETE FROM jobs WHERE name = ?1", params![name])?;
+            .execute("DELETE FROM jobs WHERE id = ?1", params![id])?;
         if count == 0 {
             return Err(StoreError::JobNotFound {
-                name: name.to_string(),
+                name: id.to_string(),
             });
         }
         Ok(())
@@ -252,17 +302,19 @@ impl Store {
         Ok(())
     }
 
-    pub fn list_runs(&self, job_name: &str, limit: usize) -> Result<Vec<RunRecord>, StoreError> {
+    /// List runs for a job. Queries by `job_id` OR `job_name` for backward compatibility
+    /// with old runs that were stored with name-as-job_id.
+    pub fn list_runs(&self, job_id: &str, limit: usize) -> Result<Vec<RunRecord>, StoreError> {
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut stmt = self.conn.prepare(
             "SELECT id, job_id, job_name, started_at, finished_at, exit_code, stdout, stderr, status
              FROM runs
-             WHERE job_name = ?1
+             WHERE job_id = ?1 OR job_name = ?1
              ORDER BY started_at DESC
              LIMIT ?2",
         )?;
 
-        let rows = stmt.query_map(params![job_name, limit_i64], run_from_row)?;
+        let rows = stmt.query_map(params![job_id, limit_i64], run_from_row)?;
 
         let mut runs = Vec::new();
         for row in rows {
@@ -271,14 +323,15 @@ impl Store {
         Ok(runs)
     }
 
-    pub fn get_last_run(&self, job_name: &str) -> Result<Option<RunRecord>, StoreError> {
+    /// Get the most recent run for a job. Queries by `job_id` OR `job_name` for backward compat.
+    pub fn get_last_run(&self, job_id: &str) -> Result<Option<RunRecord>, StoreError> {
         let result = self.conn.query_row(
             "SELECT id, job_id, job_name, started_at, finished_at, exit_code, stdout, stderr, status
              FROM runs
-             WHERE job_name = ?1
+             WHERE job_id = ?1 OR job_name = ?1
              ORDER BY started_at DESC
              LIMIT 1",
-            params![job_name],
+            params![job_id],
             run_from_row,
         );
 
@@ -297,10 +350,10 @@ mod tests {
 
     use super::*;
 
-    fn make_job(name: &str) -> JobRecord {
+    fn make_job(id: &str, name: Option<&str>) -> JobRecord {
         JobRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.to_string(),
+            id: id.to_string(),
+            name: name.map(str::to_string),
             command: "echo hello".to_string(),
             schedule: "0 * * * *".to_string(),
             working_dir: None,
@@ -313,7 +366,7 @@ mod tests {
         RunRecord {
             id: uuid::Uuid::new_v4().to_string(),
             job_id: job.id.clone(),
-            job_name: job.name.clone(),
+            job_name: job.name.clone().unwrap_or_else(|| job.id.clone()),
             started_at: Utc::now(),
             finished_at: None,
             exit_code: None,
@@ -326,8 +379,8 @@ mod tests {
     #[test]
     fn test_insert_and_list_jobs() {
         let store = Store::open_in_memory().unwrap();
-        let job1 = make_job("backup");
-        let job2 = make_job("cleanup");
+        let job1 = make_job("aaaaaaaa", Some("backup"));
+        let job2 = make_job("bbbbbbbb", Some("cleanup"));
 
         store.insert_job(&job1).unwrap();
         store.insert_job(&job2).unwrap();
@@ -335,39 +388,65 @@ mod tests {
         let jobs = store.list_jobs().unwrap();
         assert_eq!(jobs.len(), 2);
         // ordered by name
-        assert_eq!(jobs[0].name, "backup");
-        assert_eq!(jobs[1].name, "cleanup");
+        assert_eq!(jobs[0].name, Some("backup".to_string()));
+        assert_eq!(jobs[1].name, Some("cleanup".to_string()));
     }
 
     #[test]
-    fn test_duplicate_job_name() {
+    fn test_insert_job_without_name() {
         let store = Store::open_in_memory().unwrap();
-        let job = make_job("backup");
+        let job = make_job("aaaaaaaa", None);
         store.insert_job(&job).unwrap();
 
-        let job2 = make_job("backup");
+        let jobs = store.list_jobs().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert!(jobs[0].name.is_none());
+    }
+
+    #[test]
+    fn test_duplicate_job_id() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        let job2 = make_job("aaaaaaaa", Some("backup2"));
         let err = store.insert_job(&job2).unwrap_err();
         assert!(matches!(err, StoreError::JobAlreadyExists { .. }));
     }
 
     #[test]
-    fn test_delete_job() {
+    fn test_get_job_by_id_and_name() {
         let store = Store::open_in_memory().unwrap();
-        let job = make_job("backup");
+        let job = make_job("aaaaaaaa", Some("backup"));
         store.insert_job(&job).unwrap();
 
-        store.delete_job("backup").unwrap();
+        // by id
+        let found = store.get_job("aaaaaaaa").unwrap();
+        assert_eq!(found.id, "aaaaaaaa");
+
+        // by name
+        let found = store.get_job("backup").unwrap();
+        assert_eq!(found.id, "aaaaaaaa");
+    }
+
+    #[test]
+    fn test_delete_job_by_id() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        store.delete_job("aaaaaaaa").unwrap();
         let jobs = store.list_jobs().unwrap();
         assert_eq!(jobs.len(), 0);
 
-        let err = store.delete_job("backup").unwrap_err();
+        let err = store.delete_job("aaaaaaaa").unwrap_err();
         assert!(matches!(err, StoreError::JobNotFound { .. }));
     }
 
     #[test]
     fn test_insert_and_list_runs() {
         let store = Store::open_in_memory().unwrap();
-        let job = make_job("backup");
+        let job = make_job("aaaaaaaa", Some("backup"));
         store.insert_job(&job).unwrap();
 
         let run1 = make_run(&job, RunStatus::Success);
@@ -375,22 +454,47 @@ mod tests {
         store.insert_run(&run1).unwrap();
         store.insert_run(&run2).unwrap();
 
-        let runs = store.list_runs("backup", 10).unwrap();
+        let runs = store.list_runs("aaaaaaaa", 10).unwrap();
         assert_eq!(runs.len(), 2);
+    }
+
+    #[test]
+    fn test_list_runs_backward_compat_by_name() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        // Simulate old run stored with name as job_id
+        let old_run = RunRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            job_id: "backup".to_string(),
+            job_name: "backup".to_string(),
+            started_at: Utc::now(),
+            finished_at: None,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            status: RunStatus::Success,
+        };
+        store.insert_run(&old_run).unwrap();
+
+        // Query by name should find it via job_name column
+        let runs = store.list_runs("backup", 10).unwrap();
+        assert_eq!(runs.len(), 1);
     }
 
     #[test]
     fn test_get_last_run() {
         let store = Store::open_in_memory().unwrap();
-        let job = make_job("backup");
+        let job = make_job("aaaaaaaa", Some("backup"));
         store.insert_job(&job).unwrap();
 
-        assert!(store.get_last_run("backup").unwrap().is_none());
+        assert!(store.get_last_run("aaaaaaaa").unwrap().is_none());
 
         let run = make_run(&job, RunStatus::Success);
         store.insert_run(&run).unwrap();
 
-        let last = store.get_last_run("backup").unwrap();
+        let last = store.get_last_run("aaaaaaaa").unwrap();
         assert!(last.is_some());
         assert_eq!(last.unwrap().status, RunStatus::Success);
     }
@@ -398,7 +502,7 @@ mod tests {
     #[test]
     fn test_update_run_not_found() {
         let store = Store::open_in_memory().unwrap();
-        let job = make_job("backup");
+        let job = make_job("aaaaaaaa", Some("backup"));
         store.insert_job(&job).unwrap();
 
         let mut run = make_run(&job, RunStatus::Running);
@@ -410,16 +514,16 @@ mod tests {
     #[test]
     fn test_delete_job_also_has_runs() {
         let store = Store::open_in_memory().unwrap();
-        let job = make_job("backup");
+        let job = make_job("aaaaaaaa", Some("backup"));
         store.insert_job(&job).unwrap();
 
         let run = make_run(&job, RunStatus::Success);
         store.insert_run(&run).unwrap();
 
-        store.delete_job("backup").unwrap();
+        store.delete_job("aaaaaaaa").unwrap();
 
-        // Runs persist independently (no FK) — queried by job_name
-        let runs = store.list_runs("backup", 10).unwrap();
+        // Runs persist independently (no FK) — queried by job_id
+        let runs = store.list_runs("aaaaaaaa", 10).unwrap();
         assert_eq!(runs.len(), 1);
     }
 

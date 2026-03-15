@@ -41,21 +41,21 @@ cargo install --git https://github.com/samuellawrentz/kron.git kron
 # Schedule a backup at 2am every day
 kron add "every day at 2am" ./backup.sh
 
-# Or use standard cron syntax
-kron add "0 2 * * *" ./backup.sh
+# Or use standard cron syntax with a custom name
+kron add --name db-backup "0 2 * * *" pg_dump mydb
 
 # See all your jobs
 kron list
 
-# Don't wait until 2am — run it now
-kron run backup
+# Don't wait until 2am — run it now (by ID or name)
+kron run db-backup
 
 # What happened?
 kron status           # quick overview of all jobs
-kron history backup   # full run history
-kron logs backup      # stdout + stderr from last run
+kron history db-backup   # full run history
+kron logs db-backup      # stdout + stderr from last run
 
-# Start the scheduler (keeps running, executes jobs on schedule)
+# Start the scheduler (runs in background)
 kron daemon
 ```
 
@@ -76,14 +76,14 @@ kron daemon
 
 | Command | What it does |
 |---|---|
-| `kron add <schedule> <command>` | Add a new scheduled job |
+| `kron add <schedule> <command>` | Add a new job (auto-generates short ID) |
 | `kron list` | List all jobs |
 | `kron status` | Overview — each job + its last run result |
 | `kron history <job>` | Run history with exit codes and durations |
 | `kron logs <job>` | Captured stdout + stderr from a run |
 | `kron run <job>` | Force-run a job right now |
 | `kron remove <job>` | Remove a job |
-| `kron daemon` | Start the scheduler |
+| `kron daemon` | Start the scheduler (background; `--foreground` for fg) |
 
 ## Job Configuration
 
@@ -91,6 +91,7 @@ Jobs live as individual TOML files in `~/.config/kron/jobs/`. Edit them directly
 
 ```toml
 [job]
+id = "7a3f2bc1"
 name = "backup-db"
 command = "pg_dump mydb > /backups/mydb.sql"
 schedule = "0 2 * * *"
@@ -98,6 +99,8 @@ working_dir = "/app"
 enabled = true
 timeout = "30m"
 ```
+
+`id` is auto-generated when you run `kron add`. `name` is optional — a human-friendly label you can pass instead of the ID.
 
 **Schedule format:** Human-readable or standard cron expressions.
 
@@ -117,7 +120,7 @@ Standard cron expressions also work: `0 2 * * *`, `*/5 * * * *`, etc.
 ~/.local/share/kron/kron.db   ← kron records every run here (SQLite)
 ```
 
-The **daemon** ticks every second, checks which jobs match the current time, executes them via `sh -c`, captures all output, and writes the result to SQLite. Jobs won't overlap — if a previous run is still going, the next trigger is skipped.
+The **daemon** runs in the background by default (`kron daemon`). Use `--foreground` to keep it in the terminal. It ticks every second, checks which jobs match the current time, executes them via `sh -c`, captures all output, and writes the result to SQLite. Jobs won't overlap — if a previous run is still going, the next trigger is skipped. Jobs are identified by short auto-generated IDs (e.g. `7a3f2bc1`); all commands accept job ID, ID prefix, or name.
 
 The **CLI** reads both the TOML files and the database to show you what's defined and what actually happened.
 
@@ -163,7 +166,6 @@ cargo clippy --all-targets
 
 ## Roadmap
 
-- [x] Human-readable schedules (`"every day at 2am"` → cron expression)
 - [ ] Notifications (Slack, Telegram, webhooks)
 - [ ] Crontab import/export
 - [ ] Web dashboard
@@ -196,17 +198,21 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 # Add a job (supports human-readable schedules or cron expressions)
 kron add "every 5 minutes" "echo hello > /tmp/kron-test.txt"
+# Output: Added job a3f7b2c1
 
 # Standard cron expressions also work
 kron add "*/5 * * * *" "echo hello > /tmp/kron-test.txt"
 
 # Add a job with a specific name
 kron add --name my-task "every hour" "/path/to/script.sh"
+# Output: Added job f2e8c4d0
+#   Name: my-task
 ```
 
 Or write TOML directly to `~/.config/kron/jobs/<name>.toml`:
 ```toml
 [job]
+id = "f2e8c4d0"
 name = "my-task"
 command = "/path/to/script.sh --flag"
 schedule = "0 * * * *"
@@ -229,15 +235,23 @@ kron remove <job-name>       # delete the job definition
 ### Running the Daemon
 
 ```bash
-# Start in foreground (for process managers like systemd)
+# Start in background (default)
 kron daemon
 
+# Start in foreground (for process managers like systemd)
+kron daemon --foreground
+
 # The daemon:
+# - Runs in background by default (PID saved to ~/.local/share/kron/daemon.pid)
 # - Checks jobs every 1 second
 # - Reloads TOML configs every 10 seconds (hot-reload, no restart needed)
 # - Prevents job overlap automatically
 # - Captures all stdout/stderr to SQLite
 # - Exits cleanly on SIGTERM/SIGINT
+# - Logs to ~/.local/share/kron/daemon.log
+
+# Stop the daemon
+kill $(cat ~/.local/share/kron/daemon.pid)
 ```
 
 ### File Locations
@@ -246,15 +260,18 @@ kron daemon
 |---|---|
 | `~/.config/kron/jobs/*.toml` | Job definitions (source of truth — create/edit/delete these) |
 | `~/.local/share/kron/kron.db` | SQLite database (run history — read-only for you, kron manages it) |
+| `~/.local/share/kron/daemon.log` | Daemon output log |
+| `~/.local/share/kron/daemon.pid` | Daemon PID file |
 | `~/.local/bin/kron` | Binary (default install location) |
 
 ### Key Behaviors for Automation
 
-- **Job names** are derived from the command basename if `--name` is not specified. Names must be alphanumeric with hyphens/underscores, max 64 chars.
+- **Job IDs** are auto-generated 8-character hex strings. The optional `--name` flag adds a human-friendly label. All commands accept job ID, ID prefix, or name.
 - **Human-readable schedules** are supported in `kron add`. They are converted to cron expressions at add time — the TOML file always stores the resolved cron expression.
 - **Exit code 0** = success, anything else = failure. Check with `kron status`.
 - **TOML is the source of truth** for job definitions. Editing files directly is the intended workflow — changes are picked up within 10 seconds by the daemon.
 - **No job overlap** — if a job is still running when its next trigger fires, the trigger is skipped.
+- **Daemon** runs in background by default. PID is saved to `~/.local/share/kron/daemon.pid`. Stop with `kill $(cat ~/.local/share/kron/daemon.pid)`. Use `--foreground` for foreground mode.
 - **Environment** is inherited from the daemon's parent process, not stripped like cron.
 - **Timeouts** support suffixes: `30` (seconds), `30s`, `5m`, `1h`.
 - **Working directory** can be set per-job via the `working_dir` field.
@@ -275,8 +292,8 @@ kron run healthcheck
 # Verify it worked
 kron logs healthcheck
 
-# Start the daemon (background it or use a process manager)
-nohup kron daemon > /tmp/kron-daemon.log 2>&1 &
+# Start the daemon (backgrounds automatically)
+kron daemon
 ```
 
 ---
