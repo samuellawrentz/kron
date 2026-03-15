@@ -323,6 +323,18 @@ impl Store {
         Ok(runs)
     }
 
+    /// Count total and successful runs for a job.
+    pub fn count_runs(&self, job_id: &str) -> Result<(u64, u64), StoreError> {
+        let (total, success) = self.conn.query_row(
+            "SELECT COUNT(*), COUNT(CASE WHEN status = 'success' THEN 1 END)
+             FROM runs
+             WHERE job_id = ?1 OR job_name = ?1",
+            params![job_id],
+            |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+        )?;
+        Ok((success, total))
+    }
+
     /// Get the most recent run for a job. Queries by `job_id` OR `job_name` for backward compat.
     pub fn get_last_run(&self, job_id: &str) -> Result<Option<RunRecord>, StoreError> {
         let result = self.conn.query_row(

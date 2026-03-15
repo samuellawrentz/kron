@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/kron-mascot.png" width="200" alt="kron mascot — the Clockwork Owl" />
+</p>
+
 # kron
 
 **Cron, but it actually tells you what happened.**
