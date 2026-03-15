@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/samuellawrentz/kron/compare/kron-v0.5.1...kron-v0.5.2) (2026-03-15)
+
+
+### Bug Fixes
+
+* use stable branch ref for rust-toolchain action ([a0ee53b](https://github.com/samuellawrentz/kron/commit/a0ee53b8c422e878ffadb80cc41d35c02d898698))
+
 ## [0.5.1](https://github.com/samuellawrentz/kron/compare/kron-v0.5.0...kron-v0.5.1) (2026-03-15)
 
 
