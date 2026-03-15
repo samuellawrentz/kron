@@ -50,6 +50,9 @@ kron list
 # Don't wait until 2am — run it now (by ID or name)
 kron run db-backup
 
+# Test a job without recording (dry-run)
+kron test db-backup
+
 # What happened?
 kron status           # quick overview of all jobs
 kron history db-backup   # full run history
@@ -65,12 +68,12 @@ kron daemon
 |---|---|---|
 | Output capture | Manual redirect to file | Automatic, queryable |
 | Run history | None | Every run stored with exit code + duration |
-| Failure detection | Configure sendmail (lol) | `kron status` shows it |
+| Failure detection | Configure sendmail (lol) | Telegram/Slack/webhook alerts |
 | Job config | One cryptic line in crontab | Readable TOML files |
 | Schedule syntax | `0 2 * * *` (memorize it) | `"every day at 2am"` (or cron) |
 | Overlap prevention | None (jobs pile up) | Built-in, automatic |
 | Timeout | None | Per-job configurable |
-| Environment | Stripped to nothing | Inherits your shell env |
+| Environment | Stripped to nothing | Snapshot at creation, replay at runtime |
 
 ## Commands
 
@@ -82,8 +85,15 @@ kron daemon
 | `kron history <job>` | Run history with exit codes and durations |
 | `kron logs <job>` | Captured stdout + stderr from a run |
 | `kron run <job>` | Force-run a job right now |
+| `kron test <job>` | Dry-run a job (runs but doesn't record) |
 | `kron remove <job>` | Remove a job |
 | `kron daemon` | Start the scheduler (background; `--foreground` for fg) |
+| `kron alert add-telegram` | Add Telegram alert provider |
+| `kron alert add-slack` | Add Slack alert provider |
+| `kron alert add-webhook` | Add webhook alert provider |
+| `kron alert list` | List configured providers |
+| `kron alert test` | Send test notification |
+| `kron alert remove <index>` | Remove a provider |
 
 ## Job Configuration
 
@@ -98,6 +108,14 @@ schedule = "0 2 * * *"
 working_dir = "/app"
 enabled = true
 timeout = "30m"
+
+[job.env]
+DATABASE_URL = "postgres://localhost/mydb"
+PATH = "/usr/local/bin:/usr/bin:/bin"
+
+[job.alert]
+on_failure = true
+on_success = false
 ```
 
 `id` is auto-generated when you run `kron add`. `name` is optional — a human-friendly label you can pass instead of the ID.
@@ -112,6 +130,36 @@ at midnight on the 1st    → 0 0 0 1 * ? *
 ```
 
 Standard cron expressions also work: `0 2 * * *`, `*/5 * * * *`, etc.
+
+## Alerts
+
+Configure alert providers to get notified on job failures:
+
+```bash
+# Add providers
+kron alert add-telegram --token "bot123:ABC" --chat-id "12345"
+kron alert add-slack --webhook-url "https://hooks.slack.com/..."
+kron alert add-webhook --url "https://example.com/hook"
+
+# List configured providers
+kron alert list
+
+# Test notifications
+kron alert test
+
+# Remove a provider
+kron alert remove 1
+```
+
+Enable alerts per job in the TOML file:
+
+```toml
+[job.alert]
+on_failure = true    # alert when job fails (default: true)
+on_success = false   # alert on success too
+```
+
+Alert config is stored at `~/.config/kron/alerts.toml`.
 
 ## How It Works
 
@@ -166,10 +214,10 @@ cargo clippy --all-targets
 
 ## Roadmap
 
-- [ ] Notifications (Slack, Telegram, webhooks)
+- [x] Notifications (Slack, Telegram, webhooks)
 - [ ] Crontab import/export
 - [ ] Web dashboard
-- [ ] `kron test` (dry-run)
+- [x] `kron test` (dry-run)
 - [ ] Automatic history cleanup / retention policy
 
 ---
@@ -259,6 +307,7 @@ kill $(cat ~/.local/share/kron/daemon.pid)
 | Path | Purpose |
 |---|---|
 | `~/.config/kron/jobs/*.toml` | Job definitions (source of truth — create/edit/delete these) |
+| `~/.config/kron/alerts.toml` | Alert provider configuration |
 | `~/.local/share/kron/kron.db` | SQLite database (run history — read-only for you, kron manages it) |
 | `~/.local/share/kron/daemon.log` | Daemon output log |
 | `~/.local/share/kron/daemon.pid` | Daemon PID file |
@@ -275,6 +324,9 @@ kill $(cat ~/.local/share/kron/daemon.pid)
 - **Environment** is inherited from the daemon's parent process, not stripped like cron.
 - **Timeouts** support suffixes: `30` (seconds), `30s`, `5m`, `1h`.
 - **Working directory** can be set per-job via the `working_dir` field.
+- **Alerts** can be configured via `kron alert add-telegram/add-slack/add-webhook`. Per-job alerting is controlled by `[job.alert]` in the TOML file. Providers are stored in `~/.config/kron/alerts.toml`.
+- **Environment variables** can be captured at add time with `--capture-env`, or set manually in the `[job.env]` TOML section. Job env vars override the daemon's environment.
+- **Dry-run** with `kron test <job>` executes the job immediately but does not record the run in history.
 
 ### Example: Full Automation Flow
 

@@ -129,6 +129,8 @@ impl Scheduler {
         let command = def.command.clone();
         let working_dir = def.working_dir.clone();
         let timeout = def.timeout.as_deref().and_then(parse_duration);
+        let env_vars = def.env.clone();
+        let job_alert = def.alert.clone();
 
         let job_id_clone = job_id.clone();
         let span_name = job_display_name.clone();
@@ -182,8 +184,13 @@ impl Scheduler {
                 }
 
                 // Execute with optional timeout
-                let result =
-                    runner::execute_command(&command, working_dir.as_deref(), timeout).await;
+                let result = runner::execute_command(
+                    &command,
+                    working_dir.as_deref(),
+                    timeout,
+                    env_vars.as_ref(),
+                )
+                .await;
 
                 // Record result
                 let (finished_at, exit_code, stdout, stderr, status) = match result {
@@ -228,6 +235,10 @@ impl Scheduler {
                     }
                 };
 
+                // Retain copies needed for alert dispatch before values are moved into RunRecord
+                let status_for_alert = status.clone();
+                let stderr_for_alert = stderr.clone();
+
                 // Update run record
                 {
                     let s = Arc::clone(&store);
@@ -254,6 +265,51 @@ impl Scheduler {
                         Ok(Ok(())) => {}
                         Ok(Err(e)) => error!("failed to record run result: {e}"),
                         Err(e) => error!("spawn_blocking panicked recording run result: {e}"),
+                    }
+                }
+
+                // Fire alerts based on per-job alert settings
+                if let Some(ref alert) = job_alert {
+                    let should_alert = match status_for_alert {
+                        RunStatus::Failed => alert.on_failure,
+                        RunStatus::Success => alert.on_success,
+                        RunStatus::Running => false,
+                    };
+                    if should_alert {
+                        match crate::config::load_alerts() {
+                            Ok(alert_config) if !alert_config.provider.is_empty() => {
+                                let display_name = job_display_name.clone();
+                                let cmd = command.clone();
+                                let stderr_snippet = if stderr_for_alert.len() > 500 {
+                                    stderr_for_alert[..500].to_string()
+                                } else {
+                                    stderr_for_alert.clone()
+                                };
+                                let subject = match status_for_alert {
+                                    RunStatus::Failed => {
+                                        format!("kron job failed: {display_name}")
+                                    }
+                                    RunStatus::Success | RunStatus::Running => {
+                                        format!("kron job succeeded: {display_name}")
+                                    }
+                                };
+                                let body = format!(
+                                    "Command: {cmd}\nExit code: {}\nStderr: {stderr_snippet}",
+                                    exit_code
+                                        .map_or_else(|| "unknown".to_string(), |c| c.to_string())
+                                );
+                                tokio::spawn(async move {
+                                    crate::notify::notify_all(
+                                        &alert_config.provider,
+                                        &subject,
+                                        &body,
+                                    )
+                                    .await;
+                                });
+                            }
+                            Ok(_) => {}
+                            Err(e) => warn!("failed to load alert config: {e}"),
+                        }
                     }
                 }
             }

@@ -29,4 +29,7 @@ pub enum CoreError {
 
     #[error("job timed out after {0:?}")]
     Timeout(std::time::Duration),
+
+    #[error("notification error: {0}")]
+    Notification(String),
 }

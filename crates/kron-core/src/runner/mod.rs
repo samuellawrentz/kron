@@ -35,10 +35,12 @@ pub struct JobOutput {
 /// # Errors
 /// Returns `CoreError::Execution` if the process could not be spawned.
 /// Returns `CoreError::Timeout` if the command exceeds the given timeout.
+#[allow(clippy::implicit_hasher)]
 pub async fn execute_command(
     command: &str,
     working_dir: Option<&str>,
     timeout: Option<Duration>,
+    env_vars: Option<&std::collections::HashMap<String, String>>,
 ) -> Result<JobOutput, CoreError> {
     let started_at = Utc::now();
     let span = info_span!("execute_command", command = %command);
@@ -51,6 +53,12 @@ pub async fn execute_command(
 
         if let Some(dir) = working_dir {
             cmd.current_dir(dir);
+        }
+
+        if let Some(vars) = env_vars {
+            for (key, value) in vars {
+                cmd.env(key, value);
+            }
         }
 
         let output = if let Some(dur) = timeout {
@@ -87,7 +95,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_simple_command() {
-        let output = execute_command("echo hello", None, None).await.unwrap();
+        let output = execute_command("echo hello", None, None, None)
+            .await
+            .unwrap();
         assert!(output.success);
         assert_eq!(output.exit_code, Some(0));
         assert_eq!(output.stdout.trim(), "hello");
@@ -96,29 +106,68 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_failing_command() {
-        let output = execute_command("exit 1", None, None).await.unwrap();
+        let output = execute_command("exit 1", None, None, None).await.unwrap();
         assert!(!output.success);
         assert_eq!(output.exit_code, Some(1));
     }
 
     #[tokio::test]
     async fn test_execute_captures_stderr() {
-        let output = execute_command("echo err >&2", None, None).await.unwrap();
+        let output = execute_command("echo err >&2", None, None, None)
+            .await
+            .unwrap();
         assert!(output.success);
         assert_eq!(output.stderr.trim(), "err");
     }
 
     #[tokio::test]
     async fn test_execute_with_working_dir() {
-        let output = execute_command("pwd", Some("/tmp"), None).await.unwrap();
+        let output = execute_command("pwd", Some("/tmp"), None, None)
+            .await
+            .unwrap();
         assert!(output.success);
         assert!(output.stdout.trim().starts_with("/tmp"));
     }
 
     #[tokio::test]
     async fn test_execute_timeout() {
-        let result = execute_command("sleep 10", None, Some(Duration::from_millis(100))).await;
+        let result =
+            execute_command("sleep 10", None, Some(Duration::from_millis(100)), None).await;
         assert!(matches!(result, Err(CoreError::Timeout(_))));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_env_vars() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("KRON_TEST_VAR".to_string(), "hello123".to_string());
+        let output = execute_command("echo $KRON_TEST_VAR", None, None, Some(&env))
+            .await
+            .unwrap();
+        assert!(output.success);
+        assert_eq!(output.stdout.trim(), "hello123");
+    }
+
+    #[tokio::test]
+    async fn test_execute_env_vars_override() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("HOME".to_string(), "/tmp/kron-test-home".to_string());
+        let output = execute_command("echo $HOME", None, None, Some(&env))
+            .await
+            .unwrap();
+        assert!(output.success);
+        assert_eq!(output.stdout.trim(), "/tmp/kron-test-home");
+    }
+
+    #[tokio::test]
+    async fn test_execute_multiple_env_vars() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("KRON_A".to_string(), "alpha".to_string());
+        env.insert("KRON_B".to_string(), "beta".to_string());
+        let output = execute_command("echo $KRON_A-$KRON_B", None, None, Some(&env))
+            .await
+            .unwrap();
+        assert!(output.success);
+        assert_eq!(output.stdout.trim(), "alpha-beta");
     }
 
     #[test]

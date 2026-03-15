@@ -1,8 +1,86 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
+
+// ---------------------------------------------------------------------------
+// Alert configuration types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertConfig {
+    #[serde(default)]
+    pub provider: Vec<AlertProvider>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AlertProvider {
+    #[serde(rename = "telegram")]
+    Telegram { token: String, chat_id: String },
+    #[serde(rename = "slack")]
+    Slack { webhook_url: String },
+    #[serde(rename = "webhook")]
+    Webhook { url: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct JobAlert {
+    #[serde(default = "default_on_failure")]
+    pub on_failure: bool,
+    #[serde(default)]
+    pub on_success: bool,
+    /// Dead-man switch: alert if the job hasn't run in this duration (e.g. "1h").
+    #[serde(default)]
+    pub on_silence: Option<String>,
+}
+
+fn default_on_failure() -> bool {
+    true
+}
+
+/// Returns the path to the global alerts config file: `~/.config/kron/alerts.toml`.
+#[must_use]
+pub fn alerts_config_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from(".config"))
+        .join("kron")
+        .join("alerts.toml")
+}
+
+/// Load the global alert configuration.
+///
+/// Returns an empty `AlertConfig` (no providers) if the file does not exist.
+///
+/// # Errors
+/// Returns `CoreError` if the file exists but cannot be read or parsed.
+pub fn load_alerts() -> Result<AlertConfig, CoreError> {
+    let path = alerts_config_path();
+    if !path.exists() {
+        return Ok(AlertConfig {
+            provider: Vec::new(),
+        });
+    }
+    let contents = std::fs::read_to_string(&path)?;
+    let config: AlertConfig = toml::from_str(&contents)?;
+    Ok(config)
+}
+
+/// Write the alert configuration to `~/.config/kron/alerts.toml`.
+///
+/// # Errors
+/// Returns `CoreError` if the directory cannot be created or the file cannot be written.
+pub fn save_alerts(config: &AlertConfig) -> Result<(), CoreError> {
+    let path = alerts_config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let contents = toml::to_string(config)?;
+    std::fs::write(&path, contents)?;
+    Ok(())
+}
 
 /// Validate a job name: alphanumeric, hyphens, underscores only; max 64 chars; non-empty.
 ///
@@ -58,6 +136,10 @@ pub struct JobDefinition {
     pub enabled: bool,
     #[serde(default)]
     pub timeout: Option<String>,
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub alert: Option<JobAlert>,
 }
 
 fn default_enabled() -> bool {
@@ -217,6 +299,8 @@ mod tests {
                 working_dir: None,
                 enabled: true,
                 timeout: None,
+                env: None,
+                alert: None,
             },
         }
     }
@@ -318,6 +402,129 @@ schedule = "* * * * *"
         assert!(validate_job_name("my.job").is_err()); // dot
         assert!(validate_job_name("my@job").is_err()); // at sign
         assert!(validate_job_name("my!job").is_err()); // exclamation
+    }
+
+    #[test]
+    fn test_job_alert_default() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+
+[job.alert]
+"#;
+        let config: JobConfig = toml::from_str(toml_str).unwrap();
+        let alert = config.job.alert.unwrap();
+        assert!(alert.on_failure); // default true
+        assert!(!alert.on_success); // default false
+        assert!(alert.on_silence.is_none());
+    }
+
+    #[test]
+    fn test_job_alert_custom() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+
+[job.alert]
+on_failure = false
+on_success = true
+on_silence = "1h"
+"#;
+        let config: JobConfig = toml::from_str(toml_str).unwrap();
+        let alert = config.job.alert.unwrap();
+        assert!(!alert.on_failure);
+        assert!(alert.on_success);
+        assert_eq!(alert.on_silence.as_deref(), Some("1h"));
+    }
+
+    #[test]
+    fn test_alert_config_roundtrip() {
+        let config = AlertConfig {
+            provider: vec![
+                AlertProvider::Telegram {
+                    token: "bot123:ABC".to_string(),
+                    chat_id: "12345".to_string(),
+                },
+                AlertProvider::Slack {
+                    webhook_url: "https://hooks.slack.com/test".to_string(),
+                },
+                AlertProvider::Webhook {
+                    url: "https://example.com/hook".to_string(),
+                },
+            ],
+        };
+        let serialized = toml::to_string(&config).unwrap();
+        let parsed: AlertConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(parsed.provider.len(), 3);
+    }
+
+    #[test]
+    fn test_job_without_alert_is_none() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+"#;
+        let config: JobConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.job.alert.is_none());
+    }
+
+    #[test]
+    fn test_job_env_vars_parsing() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+
+[job.env]
+DATABASE_URL = "postgres://localhost/mydb"
+API_KEY = "secret123"
+"#;
+        let config: JobConfig = toml::from_str(toml_str).unwrap();
+        let env = config.job.env.unwrap();
+        assert_eq!(
+            env.get("DATABASE_URL").unwrap(),
+            "postgres://localhost/mydb"
+        );
+        assert_eq!(env.get("API_KEY").unwrap(), "secret123");
+    }
+
+    #[test]
+    fn test_job_without_env_is_none() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+"#;
+        let config: JobConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.job.env.is_none());
+    }
+
+    #[test]
+    fn test_job_env_roundtrip() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        env.insert("BAZ".to_string(), "qux".to_string());
+
+        let config = sample_config("rt-test");
+        let config_with_env = JobConfig {
+            job: JobDefinition {
+                env: Some(env),
+                ..config.job
+            },
+        };
+        let serialized = toml::to_string(&config_with_env).unwrap();
+        let parsed: JobConfig = toml::from_str(&serialized).unwrap();
+        let parsed_env = parsed.job.env.unwrap();
+        assert_eq!(parsed_env.get("FOO").unwrap(), "bar");
+        assert_eq!(parsed_env.get("BAZ").unwrap(), "qux");
     }
 
     #[test]

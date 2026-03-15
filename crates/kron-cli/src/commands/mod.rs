@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Subcommand;
 
 mod add;
+mod alert;
 mod daemon;
 mod history;
 mod list;
@@ -9,9 +10,47 @@ mod logs;
 mod remove;
 mod run_job;
 mod status;
+mod test_job;
+
+#[derive(Subcommand)]
+pub enum AlertCommand {
+    /// Add a Telegram alert provider
+    AddTelegram {
+        /// Bot token
+        #[arg(long)]
+        token: String,
+        /// Chat ID
+        #[arg(long)]
+        chat_id: String,
+    },
+    /// Add a Slack alert provider
+    AddSlack {
+        /// Webhook URL
+        #[arg(long)]
+        webhook_url: String,
+    },
+    /// Add a webhook alert provider
+    AddWebhook {
+        /// Webhook URL
+        #[arg(long)]
+        url: String,
+    },
+    /// List configured alert providers
+    List,
+    /// Send a test notification to all providers
+    Test,
+    /// Remove an alert provider by index
+    Remove {
+        /// Provider index (from 'kron alert list')
+        index: usize,
+    },
+}
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Manage alert providers
+    #[command(subcommand)]
+    Alert(AlertCommand),
     /// Add a new scheduled job
     Add {
         /// Schedule (cron expression or human-readable like "every day at 2am")
@@ -25,6 +64,9 @@ pub enum Command {
         /// Working directory
         #[arg(short, long)]
         working_dir: Option<String>,
+        /// Capture current environment variables
+        #[arg(long)]
+        capture_env: bool,
     },
     /// List all jobs
     List,
@@ -51,6 +93,11 @@ pub enum Command {
         /// Job ID or name
         job: String,
     },
+    /// Dry-run a job (execute without recording)
+    Test {
+        /// Job ID or name
+        job: String,
+    },
     /// Remove a job
     Remove {
         /// Job ID or name
@@ -71,13 +118,23 @@ pub async fn run(cmd: Command) -> Result<()> {
             command,
             name,
             working_dir,
-        } => add::execute(schedule, command, name, working_dir),
+            capture_env,
+        } => add::execute(schedule, command, name, working_dir, capture_env),
         Command::List => list::execute(),
         Command::Status => status::execute(),
         Command::History { job, count } => history::execute(&job, count),
         Command::Logs { job, run } => logs::execute(&job, run),
         Command::Run { job } => run_job::execute(&job).await,
+        Command::Test { job } => test_job::execute(&job).await,
         Command::Remove { job } => remove::execute(&job),
         Command::Daemon { foreground } => daemon::execute(foreground).await,
+        Command::Alert(alert_cmd) => match alert_cmd {
+            AlertCommand::AddTelegram { token, chat_id } => alert::add_telegram(token, chat_id),
+            AlertCommand::AddSlack { webhook_url } => alert::add_slack(webhook_url),
+            AlertCommand::AddWebhook { url } => alert::add_webhook(url),
+            AlertCommand::List => alert::list(),
+            AlertCommand::Test => alert::test_alerts().await,
+            AlertCommand::Remove { index } => alert::remove(index),
+        },
     }
 }

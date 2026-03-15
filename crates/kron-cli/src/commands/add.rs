@@ -55,6 +55,7 @@ pub fn execute(
     command: Vec<String>,
     name: Option<String>,
     working_dir: Option<String>,
+    capture_env: bool,
 ) -> Result<()> {
     let (resolved_schedule, original_english) = resolve_schedule(&schedule)?;
 
@@ -67,6 +68,16 @@ pub fn execute(
 
     let job_id = generate_short_id();
 
+    let env = if capture_env {
+        let mut env_map = std::collections::HashMap::new();
+        for (key, value) in std::env::vars() {
+            env_map.insert(key, value);
+        }
+        Some(env_map)
+    } else {
+        None
+    };
+
     // Save TOML config file — TOML is the single source of truth for job definitions.
     // Always store the resolved cron expression, not the English input.
     let job_config = JobConfig {
@@ -78,6 +89,8 @@ pub fn execute(
             working_dir: working_dir.clone(),
             enabled: true,
             timeout: None,
+            env,
+            alert: None,
         },
     };
     let path = config::save_job(&job_config).context("failed to save job config")?;

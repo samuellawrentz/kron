@@ -13,7 +13,9 @@ chrono = { workspace = true }
 croner = { workspace = true }
 dirs = { workspace = true }
 kron-store = { path = "../kron-store" }
+reqwest = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

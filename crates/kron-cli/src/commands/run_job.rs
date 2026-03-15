@@ -41,7 +41,13 @@ pub async fn execute(query: &str) -> Result<()> {
     let timeout = None;
 
     // Execute
-    let output = runner::execute_command(&job.command, job.working_dir.as_deref(), timeout).await?;
+    let output = runner::execute_command(
+        &job.command,
+        job.working_dir.as_deref(),
+        timeout,
+        job.env.as_ref(),
+    )
+    .await?;
 
     // Record result
     let status = if output.success {
