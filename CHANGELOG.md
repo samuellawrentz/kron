@@ -1,0 +1,16 @@
+# Changelog
+
+## [0.2.0](https://github.com/samuellawrentz/kron/compare/kron-v0.1.0...kron-v0.2.0) (2026-03-15)
+
+
+### Features
+
+* add human-readable schedule parsing with english-to-cron ([b33e8f7](https://github.com/samuellawrentz/kron/commit/b33e8f7ed5eca686b8c511479360f1698aa97125))
+* add Release Please for automated versioning and revamp README ([cc04e02](https://github.com/samuellawrentz/kron/commit/cc04e02f6244b4d9c8fbcbbb92f134706f6d5831))
+
+
+### Bug Fixes
+
+* address all security review findings ([391514d](https://github.com/samuellawrentz/kron/commit/391514d64c60cb79da7c47ec2f860251c5a9d898))
+* configure Release Please for Cargo workspace with per-crate paths ([4d8695b](https://github.com/samuellawrentz/kron/commit/4d8695bd6d43c4ac7f404bddb28bdb974fe0f2c5))
+* use simple release type to avoid cargo-workspace version.workspace issue ([283bb31](https://github.com/samuellawrentz/kron/commit/283bb3104124c91f10268973a0162dc0fad63ebd))
