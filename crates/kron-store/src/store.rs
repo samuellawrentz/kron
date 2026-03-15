@@ -18,15 +18,14 @@ const MIGRATIONS: &[M<'static>] = &[M::up(
     );
     CREATE TABLE IF NOT EXISTS runs (
         id          TEXT PRIMARY KEY NOT NULL,
-        job_id      TEXT NOT NULL,
+        job_id      TEXT NOT NULL DEFAULT '',
         job_name    TEXT NOT NULL,
         started_at  TEXT NOT NULL,
         finished_at TEXT,
         exit_code   INTEGER,
         stdout      TEXT NOT NULL DEFAULT '',
         stderr      TEXT NOT NULL DEFAULT '',
-        status      TEXT NOT NULL DEFAULT 'running',
-        FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        status      TEXT NOT NULL DEFAULT 'running'
     );
     CREATE INDEX idx_runs_job_started ON runs(job_name, started_at DESC);",
 )];
@@ -88,6 +87,14 @@ fn run_from_row(row: &Row) -> rusqlite::Result<RunRecord> {
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                StoreError::Database(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(14), // SQLITE_CANTOPEN
+                    Some(format!("failed to create data directory: {e}")),
+                ))
+            })?;
+        }
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys = ON;")?;
         let mut store = Self { conn };
@@ -377,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cascade_delete() {
+    fn test_delete_job_also_has_runs() {
         let store = Store::open_in_memory().unwrap();
         let job = make_job("backup");
         store.insert_job(&job).unwrap();
@@ -387,8 +394,8 @@ mod tests {
 
         store.delete_job("backup").unwrap();
 
-        // runs should be gone due to cascade
+        // Runs persist independently (no FK) — queried by job_name
         let runs = store.list_runs("backup", 10).unwrap();
-        assert_eq!(runs.len(), 0);
+        assert_eq!(runs.len(), 1);
     }
 }

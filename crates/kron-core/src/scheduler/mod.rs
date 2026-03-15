@@ -125,10 +125,7 @@ impl Scheduler {
         let working_dir = def.working_dir.clone();
         let timeout = def.timeout.as_deref().map(parse_duration);
 
-        // Issue 1: get_job via spawn_blocking to avoid blocking the async runtime
-        let store_clone = Arc::clone(&store);
         let name_clone = name.clone();
-
         let span_name = name.clone();
         tokio::spawn(
             async move {
@@ -147,21 +144,8 @@ impl Scheduler {
                     name: name.clone(),
                 };
 
-                // Issue 1: wrap get_job in spawn_blocking
-                let job_id = {
-                    let s = Arc::clone(&store_clone);
-                    let n = name_clone.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let store = s.lock().unwrap_or_else(|e| {
-                            warn!("store mutex was poisoned, recovering");
-                            e.into_inner()
-                        });
-                        store.get_job(&n).map(|j| j.id).unwrap_or_default()
-                    })
-                    .await
-                    .unwrap_or_default()
-                };
-
+                // job_id is the job name (TOML is source of truth, no jobs table)
+                let job_id = name_clone.clone();
                 let run_id = Uuid::new_v4().to_string();
                 let started_at = Utc::now();
 
