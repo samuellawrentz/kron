@@ -5,7 +5,11 @@ use tracing_subscriber::EnvFilter;
 mod commands;
 
 #[derive(Parser)]
-#[command(name = "kron", version, about = "Cron, but it actually tells you what happened")]
+#[command(
+    name = "kron",
+    version,
+    about = "Cron, but it actually tells you what happened"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: commands::Command,

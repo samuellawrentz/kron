@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use croner::Cron;
 
 use kron_core::config::{self, JobConfig, JobDefinition};
@@ -10,7 +10,10 @@ fn validate_job_name(name: &str) -> Result<()> {
     if name.len() > 64 {
         bail!("job name too long (max 64 characters)");
     }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         bail!("job name must contain only alphanumeric characters, hyphens, and underscores");
     }
     Ok(())

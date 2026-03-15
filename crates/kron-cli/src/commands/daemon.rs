@@ -15,9 +15,8 @@ pub async fn execute() -> Result<()> {
     let cancel_clone = cancel.clone();
     tokio::spawn(async move {
         #[allow(clippy::expect_used)]
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate()
-        ).expect("failed to register SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
 
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},

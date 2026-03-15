@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use tokio::process::Command;
-use tracing::{info, info_span, Instrument};
+use tracing::{Instrument, info, info_span};
 
 use crate::error::CoreError;
 

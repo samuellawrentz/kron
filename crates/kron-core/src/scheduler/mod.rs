@@ -6,7 +6,7 @@ use chrono::Utc;
 use croner::Cron;
 use kron_store::{RunRecord, RunStatus, Store};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, info_span, warn, Instrument};
+use tracing::{Instrument, error, info, info_span, warn};
 use uuid::Uuid;
 
 use crate::config::{self, JobDefinition};
@@ -69,11 +69,7 @@ impl Scheduler {
         }
     }
 
-    fn tick(
-        &self,
-        jobs: &[CachedJob],
-        last_check: &mut HashMap<String, chrono::DateTime<Utc>>,
-    ) {
+    fn tick(&self, jobs: &[CachedJob], last_check: &mut HashMap<String, chrono::DateTime<Utc>>) {
         let now = Utc::now();
         let now_minute = now.format("%Y-%m-%d %H:%M").to_string();
 
@@ -225,11 +221,23 @@ impl Scheduler {
                     }
                     Err(CoreError::Timeout(dur)) => {
                         warn!(job = %name, timeout = ?dur, "job timed out");
-                        (Utc::now(), None, String::new(), format!("timed out after {dur:?}"), RunStatus::Failed)
+                        (
+                            Utc::now(),
+                            None,
+                            String::new(),
+                            format!("timed out after {dur:?}"),
+                            RunStatus::Failed,
+                        )
                     }
                     Err(e) => {
                         error!("job execution failed: {e}");
-                        (Utc::now(), None, String::new(), e.to_string(), RunStatus::Failed)
+                        (
+                            Utc::now(),
+                            None,
+                            String::new(),
+                            e.to_string(),
+                            RunStatus::Failed,
+                        )
                     }
                 };
 

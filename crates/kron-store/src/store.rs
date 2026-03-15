@@ -221,11 +221,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn list_runs(
-        &self,
-        job_name: &str,
-        limit: usize,
-    ) -> Result<Vec<RunRecord>, StoreError> {
+    pub fn list_runs(&self, job_name: &str, limit: usize) -> Result<Vec<RunRecord>, StoreError> {
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut stmt = self.conn.prepare(
             "SELECT id, job_id, job_name, started_at, finished_at, exit_code, stdout, stderr, status

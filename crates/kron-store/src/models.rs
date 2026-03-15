@@ -51,7 +51,10 @@ impl RunStatus {
             "success" => Self::Success,
             "failed" => Self::Failed,
             _ => {
-                tracing::warn!(status = s, "unrecognized RunStatus value, defaulting to Failed");
+                tracing::warn!(
+                    status = s,
+                    "unrecognized RunStatus value, defaulting to Failed"
+                );
                 Self::Failed
             }
         }

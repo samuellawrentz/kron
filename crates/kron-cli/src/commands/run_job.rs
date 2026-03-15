@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -34,7 +34,9 @@ pub async fn execute(job_name: &str) -> Result<()> {
         stderr: String::new(),
         status: RunStatus::Running,
     };
-    store.insert_run(&run).context("failed to record run start")?;
+    store
+        .insert_run(&run)
+        .context("failed to record run start")?;
 
     // TODO: parse job.timeout string into Duration when a duration-parsing crate is added
     let timeout = None;
