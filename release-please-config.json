@@ -1,14 +1,27 @@
 {
   "packages": {
-    ".": {
+    "crates/kron-cli": {
       "release-type": "rust",
-      "component": "kron",
-      "bump-minor-pre-major": true,
-      "extra-files": [
-        "crates/kron-cli/Cargo.toml",
-        "crates/kron-core/Cargo.toml",
-        "crates/kron-store/Cargo.toml"
-      ]
+      "component": "kron"
+    },
+    "crates/kron-core": {
+      "release-type": "rust",
+      "component": "kron-core"
+    },
+    "crates/kron-store": {
+      "release-type": "rust",
+      "component": "kron-store"
     }
-  }
+  },
+  "plugins": [
+    {
+      "type": "cargo-workspace",
+      "merge": false
+    },
+    {
+      "type": "linked-versions",
+      "groupName": "kron",
+      "components": ["kron", "kron-core", "kron-store"]
+    }
+  ]
 }
