@@ -11,6 +11,7 @@ mod remove;
 mod run_job;
 mod status;
 mod test_job;
+mod update;
 
 #[derive(Subcommand)]
 pub enum AlertCommand {
@@ -82,8 +83,8 @@ pub enum Command {
     },
     /// Show logs from a job run
     Logs {
-        /// Job ID or name
-        job: String,
+        /// Job ID or name (defaults to most recent run)
+        job: Option<String>,
         /// Run number (1 = most recent)
         #[arg(long, default_value = "1")]
         run: usize,
@@ -106,6 +107,8 @@ pub enum Command {
     /// Manage the scheduler daemon
     #[command(subcommand)]
     Daemon(DaemonCommand),
+    /// Update kron to the latest version
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -136,7 +139,7 @@ pub async fn run(cmd: Command) -> Result<()> {
         Command::List => list::execute(),
         Command::Status => status::execute(),
         Command::History { job, count } => history::execute(&job, count),
-        Command::Logs { job, run } => logs::execute(&job, run),
+        Command::Logs { job, run } => logs::execute(job.as_deref(), run),
         Command::Run { job } => run_job::execute(&job).await,
         Command::Test { job } => test_job::execute(&job).await,
         Command::Remove { job } => remove::execute(&job),
@@ -146,6 +149,7 @@ pub async fn run(cmd: Command) -> Result<()> {
             DaemonCommand::Uninstall => daemon::uninstall(),
             DaemonCommand::Status => daemon::service_status(),
         },
+        Command::Update => update::execute(),
         Command::Alert(alert_cmd) => match alert_cmd {
             AlertCommand::AddTelegram { token, chat_id } => alert::add_telegram(token, chat_id),
             AlertCommand::AddSlack { webhook_url } => alert::add_slack(webhook_url),

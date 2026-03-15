@@ -38,7 +38,9 @@ pub fn execute() -> Result<()> {
                     name_display,
                     run.status.as_str(),
                     exit_code,
-                    run.started_at.format("%Y-%m-%d %H:%M:%S"),
+                    run.started_at
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M:%S"),
                 );
             }
             None => {

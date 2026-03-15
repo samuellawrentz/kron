@@ -51,7 +51,9 @@ pub fn execute(query: &str, count: usize) -> Result<()> {
             run.status.as_str(),
             exit_code,
             duration,
-            run.started_at.format("%Y-%m-%d %H:%M:%S"),
+            run.started_at
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S"),
         );
     }
 

@@ -2,30 +2,36 @@ use anyhow::{Context, Result, bail};
 use kron_core::config;
 use kron_store::Store;
 
-pub fn execute(query: &str, run_number: usize) -> Result<()> {
-    // Resolve job by ID or name
-    let job_config = config::find_job(query)
-        .context("failed to load jobs")?
-        .with_context(|| format!("job '{query}' not found"))?;
-    let job = &job_config.job;
-
+pub fn execute(query: Option<&str>, run_number: usize) -> Result<()> {
     let store = Store::open(&config::db_path()).context("failed to open database")?;
-    // Fetch up to run_number runs (DESC order). Index run_number-1 gives the requested run.
-    let runs = store.list_runs(&job.id, run_number)?;
 
-    let display = job.name.as_deref().unwrap_or(&job.id);
+    let run = if let Some(query) = query {
+        // Resolve job by ID or name
+        let job_config = config::find_job(query)
+            .context("failed to load jobs")?
+            .with_context(|| format!("job '{query}' not found"))?;
+        let job = &job_config.job;
 
-    if runs.is_empty() {
-        bail!("no runs recorded for '{display}'");
-    }
+        let runs = store.list_runs(&job.id, run_number)?;
+        let display = job.name.as_deref().unwrap_or(&job.id);
 
-    // runs are in DESC order (most recent first). run_number=1 means most recent = index 0
-    let run = runs.get(run_number - 1).with_context(|| {
-        format!(
-            "run #{run_number} not found (only {} runs recorded)",
-            runs.len()
-        )
-    })?;
+        if runs.is_empty() {
+            bail!("no runs recorded for '{display}'");
+        }
+
+        runs.into_iter()
+            .nth(run_number - 1)
+            .with_context(|| format!("run #{run_number} not found for '{display}'"))?
+    } else {
+        // No job specified — show the most recent run across all jobs
+        store.get_latest_run()?.context("no runs recorded yet")?
+    };
+
+    let display = if run.job_name.is_empty() {
+        &run.job_id
+    } else {
+        &run.job_name
+    };
 
     let exit_code = run
         .exit_code
@@ -33,7 +39,9 @@ pub fn execute(query: &str, run_number: usize) -> Result<()> {
 
     println!(
         "=== Job: {display} | Run #{run_number} | {} ===",
-        run.started_at.format("%Y-%m-%d %H:%M:%S")
+        run.started_at
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S")
     );
     println!("Status: {} | Exit code: {exit_code}", run.status.as_str());
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/kron-mascot.png" width="200" alt="kron mascot — the Clockwork Owl" />
+  <img src="assets/kron-mascot.png" width="400" alt="kron mascot — the Clockwork Owl" />
 </p>
 
 # kron

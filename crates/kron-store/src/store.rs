@@ -335,6 +335,24 @@ impl Store {
         Ok((success, total))
     }
 
+    /// Get the most recent run across all jobs.
+    pub fn get_latest_run(&self) -> Result<Option<RunRecord>, StoreError> {
+        let result = self.conn.query_row(
+            "SELECT id, job_id, job_name, started_at, finished_at, exit_code, stdout, stderr, status
+             FROM runs
+             ORDER BY started_at DESC
+             LIMIT 1",
+            [],
+            run_from_row,
+        );
+
+        match result {
+            Ok(run) => Ok(Some(run)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StoreError::Database(e)),
+        }
+    }
+
     /// Get the most recent run for a job. Queries by `job_id` OR `job_name` for backward compat.
     pub fn get_last_run(&self, job_id: &str) -> Result<Option<RunRecord>, StoreError> {
         let result = self.conn.query_row(
