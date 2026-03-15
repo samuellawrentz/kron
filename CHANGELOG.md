@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/samuellawrentz/kron/compare/kron-v0.4.0...kron-v0.5.0) (2026-03-15)
+
+
+### Features
+
+* add daemon install/uninstall for systemd and launchd ([de0b18a](https://github.com/samuellawrentz/kron/commit/de0b18a0b1c68606dadd40d348e4a96edf040b6e))
+
 ## [0.4.0](https://github.com/samuellawrentz/kron/compare/kron-v0.3.0...kron-v0.4.0) (2026-03-15)
 
 
