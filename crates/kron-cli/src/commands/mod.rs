@@ -103,12 +103,25 @@ pub enum Command {
         /// Job ID or name
         job: String,
     },
-    /// Start the scheduler daemon
-    Daemon {
-        /// Run in foreground (default: background)
+    /// Manage the scheduler daemon
+    #[command(subcommand)]
+    Daemon(DaemonCommand),
+}
+
+#[derive(Subcommand)]
+pub enum DaemonCommand {
+    /// Start the daemon
+    Start {
+        /// Run in foreground
         #[arg(short, long)]
         foreground: bool,
     },
+    /// Install as a system service (survives restarts)
+    Install,
+    /// Uninstall the system service
+    Uninstall,
+    /// Show service status
+    Status,
 }
 
 pub async fn run(cmd: Command) -> Result<()> {
@@ -127,7 +140,12 @@ pub async fn run(cmd: Command) -> Result<()> {
         Command::Run { job } => run_job::execute(&job).await,
         Command::Test { job } => test_job::execute(&job).await,
         Command::Remove { job } => remove::execute(&job),
-        Command::Daemon { foreground } => daemon::execute(foreground).await,
+        Command::Daemon(daemon_cmd) => match daemon_cmd {
+            DaemonCommand::Start { foreground } => daemon::execute(foreground).await,
+            DaemonCommand::Install => daemon::install(),
+            DaemonCommand::Uninstall => daemon::uninstall(),
+            DaemonCommand::Status => daemon::service_status(),
+        },
         Command::Alert(alert_cmd) => match alert_cmd {
             AlertCommand::AddTelegram { token, chat_id } => alert::add_telegram(token, chat_id),
             AlertCommand::AddSlack { webhook_url } => alert::add_slack(webhook_url),

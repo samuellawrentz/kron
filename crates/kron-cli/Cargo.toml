@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+dirs = { workspace = true }
 english-to-cron = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }

@@ -3,6 +3,7 @@ name: Release Please
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -28,6 +29,9 @@ jobs:
         run: |
           PR_NUMBER=$(echo '${{ steps.release.outputs.pr }}' | jq -r '.number')
           gh pr merge "$PR_NUMBER" --repo "${{ github.repository }}" --squash
+          # GITHUB_TOKEN merges don't trigger workflows, so re-trigger manually
+          sleep 5
+          gh workflow run release-please.yml --repo "${{ github.repository }}"
 
   build:
     needs: release-please
