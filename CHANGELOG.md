@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/samuellawrentz/kron/compare/kron-v0.2.0...kron-v0.3.0) (2026-03-15)
+
+
+### Features
+
+* use auto-generated short IDs as primary job identifier ([b8169df](https://github.com/samuellawrentz/kron/commit/b8169dfca59e1b3adf571a364e9cf39f7e125998))
+
 ## [0.2.0](https://github.com/samuellawrentz/kron/compare/kron-v0.1.0...kron-v0.2.0) (2026-03-15)
 
 
