@@ -2,13 +2,39 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if version tag exists
+        id: check
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION"
+          if git tag -l "v$VERSION" | grep -q .; then
+            echo "Tag v$VERSION already exists, skipping release"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag v$VERSION does not exist, will release"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -60,10 +86,17 @@ jobs:
             ${{ matrix.name }}.tar.gz.sha256
 
   release:
-    needs: build
+    needs: [check-version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ needs.check-version.outputs.version }}" -m "Release v${{ needs.check-version.outputs.version }}"
+          git push origin "v${{ needs.check-version.outputs.version }}"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -75,7 +108,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "kron ${{ github.ref_name }}" \
+          gh release create "v${{ needs.check-version.outputs.version }}" \
+            --title "kron v${{ needs.check-version.outputs.version }}" \
             --generate-notes \
             artifacts/*
