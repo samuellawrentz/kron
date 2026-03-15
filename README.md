@@ -39,6 +39,9 @@ cargo install --git https://github.com/samuellawrentz/kron.git kron
 
 ```bash
 # Schedule a backup at 2am every day
+kron add "every day at 2am" ./backup.sh
+
+# Or use standard cron syntax
 kron add "0 2 * * *" ./backup.sh
 
 # See all your jobs
@@ -64,6 +67,7 @@ kron daemon
 | Run history | None | Every run stored with exit code + duration |
 | Failure detection | Configure sendmail (lol) | `kron status` shows it |
 | Job config | One cryptic line in crontab | Readable TOML files |
+| Schedule syntax | `0 2 * * *` (memorize it) | `"every day at 2am"` (or cron) |
 | Overlap prevention | None (jobs pile up) | Built-in, automatic |
 | Timeout | None | Per-job configurable |
 | Environment | Stripped to nothing | Inherits your shell env |
@@ -95,14 +99,16 @@ enabled = true
 timeout = "30m"
 ```
 
-**Schedule format:** Standard 5-field cron expressions — `minute hour day-of-month month day-of-week`.
+**Schedule format:** Human-readable or standard cron expressions.
 
 ```
-*/5 * * * *       every 5 minutes
-0 2 * * *         2am daily
-0 9 * * 1-5       9am weekdays
-0 0 1 * *         midnight on the 1st
+every day at 2am          → 0 2 * * *
+every 5 minutes           → 0 */5 * * * ? *
+every monday at 9am       → 0 0 9 * * MON *
+at midnight on the 1st    → 0 0 0 1 * ? *
 ```
+
+Standard cron expressions also work: `0 2 * * *`, `*/5 * * * *`, etc.
 
 ## How It Works
 
@@ -157,7 +163,7 @@ cargo clippy --all-targets
 
 ## Roadmap
 
-- [ ] Human-readable schedules (`"every day at 2am"` → cron expression)
+- [x] Human-readable schedules (`"every day at 2am"` → cron expression)
 - [ ] Notifications (Slack, Telegram, webhooks)
 - [ ] Crontab import/export
 - [ ] Web dashboard
@@ -188,11 +194,14 @@ export PATH="$HOME/.local/bin:$PATH"
 ### Creating Jobs
 
 ```bash
-# Add a job (schedule is a standard cron expression, command is passed to sh -c)
+# Add a job (supports human-readable schedules or cron expressions)
+kron add "every 5 minutes" "echo hello > /tmp/kron-test.txt"
+
+# Standard cron expressions also work
 kron add "*/5 * * * *" "echo hello > /tmp/kron-test.txt"
 
 # Add a job with a specific name
-kron add --name my-task "0 * * * *" "/path/to/script.sh"
+kron add --name my-task "every hour" "/path/to/script.sh"
 ```
 
 Or write TOML directly to `~/.config/kron/jobs/<name>.toml`:
@@ -242,6 +251,7 @@ kron daemon
 ### Key Behaviors for Automation
 
 - **Job names** are derived from the command basename if `--name` is not specified. Names must be alphanumeric with hyphens/underscores, max 64 chars.
+- **Human-readable schedules** are supported in `kron add`. They are converted to cron expressions at add time — the TOML file always stores the resolved cron expression.
 - **Exit code 0** = success, anything else = failure. Check with `kron status`.
 - **TOML is the source of truth** for job definitions. Editing files directly is the intended workflow — changes are picked up within 10 seconds by the daemon.
 - **No job overlap** — if a job is still running when its next trigger fires, the trigger is skipped.

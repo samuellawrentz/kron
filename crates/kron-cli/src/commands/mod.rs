@@ -14,7 +14,7 @@ mod status;
 pub enum Command {
     /// Add a new scheduled job
     Add {
-        /// Schedule (cron expression like "0 2 * * *")
+        /// Schedule (cron expression or human-readable like "every day at 2am")
         schedule: String,
         /// Command to execute
         #[arg(trailing_var_arg = true, required = true)]

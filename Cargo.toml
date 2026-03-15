@@ -19,6 +19,7 @@ expect_used = "warn"
 
 [workspace.dependencies]
 anyhow = "1"
+english-to-cron = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 croner = "2"
