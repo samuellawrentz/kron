@@ -33,22 +33,23 @@ kron history <job>
 kron logs <job>
 kron test <job>          # dry-run
 kron run <job>           # force run
-kron import              # from system crontab
-kron export              # to crontab format
+kron remove <job>
+kron import              # from system crontab (interactive selection)
+kron import --all        # import all crontab entries
+kron export              # to crontab format (planned)
+kron alert add-telegram  # configure alerts
+kron daemon start        # run scheduler
+kron daemon install      # install as system service
+kron update              # self-update
 ```
 
-## Project Structure (planned)
+## Project Structure
 
 ```
-src/
-  main.rs                # CLI entry point (clap)
-  cli/                   # Command handlers
-  scheduler/             # Job scheduling engine
-  runner/                # Job execution (env capture, output capture)
-  store/                 # SQLite storage layer
-  notify/                # Telegram, Slack, webhook notifications
-  parser/                # Human-readable schedule parser ("every day at 2am")
-  config/                # TOML job definition parsing
+crates/
+  kron-cli/              # CLI entry point (clap) + command handlers
+  kron-core/             # Core logic: config, scheduler, runner, crontab parser, notifications
+  kron-store/            # SQLite storage layer
 ```
 
 ## Development

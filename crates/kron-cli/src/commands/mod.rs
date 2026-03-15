@@ -5,6 +5,7 @@ mod add;
 mod alert;
 mod daemon;
 mod history;
+mod import;
 mod list;
 mod logs;
 mod remove;
@@ -104,6 +105,12 @@ pub enum Command {
         /// Job ID or name
         job: String,
     },
+    /// Import jobs from system crontab
+    Import {
+        /// Import all entries without prompting for selection
+        #[arg(long)]
+        all: bool,
+    },
     /// Manage the scheduler daemon
     #[command(subcommand)]
     Daemon(DaemonCommand),
@@ -143,6 +150,7 @@ pub async fn run(cmd: Command) -> Result<()> {
         Command::Run { job } => run_job::execute(&job).await,
         Command::Test { job } => test_job::execute(&job).await,
         Command::Remove { job } => remove::execute(&job),
+        Command::Import { all } => import::execute(all),
         Command::Daemon(daemon_cmd) => match daemon_cmd {
             DaemonCommand::Start { foreground } => daemon::execute(foreground).await,
             DaemonCommand::Install => daemon::install(),
