@@ -1,5 +1,3 @@
 {
-  "crates/kron-cli": "0.1.0",
-  "crates/kron-core": "0.1.0",
-  "crates/kron-store": "0.1.0"
+  ".": "0.1.0"
 }
