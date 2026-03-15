@@ -323,16 +323,28 @@ impl Store {
         Ok(runs)
     }
 
-    /// Count total and successful runs for a job.
-    pub fn count_runs(&self, job_id: &str) -> Result<(u64, u64), StoreError> {
-        let (total, success) = self.conn.query_row(
-            "SELECT COUNT(*), COUNT(CASE WHEN status = 'success' THEN 1 END)
+    /// Count total and successful runs for all jobs in a single query.
+    pub fn count_all_runs(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (u64, u64)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT job_id, COUNT(*), COUNT(CASE WHEN status = 'success' THEN 1 END)
              FROM runs
-             WHERE job_id = ?1 OR job_name = ?1",
-            params![job_id],
-            |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+             GROUP BY job_id",
         )?;
-        Ok((success, total))
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u64>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (job_id, total, success) = row?;
+            map.insert(job_id, (success, total));
+        }
+        Ok(map)
     }
 
     /// Get the most recent run across all jobs.

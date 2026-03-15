@@ -75,8 +75,8 @@ pub enum Command {
     Status,
     /// Show run history for a job
     History {
-        /// Job ID or name
-        job: String,
+        /// Job ID or name (defaults to most recent run)
+        job: Option<String>,
         /// Number of runs to show
         #[arg(short = 'n', long, default_value = "10")]
         count: usize,
@@ -138,7 +138,7 @@ pub async fn run(cmd: Command) -> Result<()> {
         } => add::execute(schedule, command, name, working_dir, capture_env),
         Command::List => list::execute(),
         Command::Status => status::execute(),
-        Command::History { job, count } => history::execute(&job, count),
+        Command::History { job, count } => history::execute(job.as_deref(), count),
         Command::Logs { job, run } => logs::execute(job.as_deref(), run),
         Command::Run { job } => run_job::execute(&job).await,
         Command::Test { job } => test_job::execute(&job).await,

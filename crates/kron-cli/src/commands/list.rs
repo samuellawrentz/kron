@@ -11,6 +11,7 @@ pub fn execute() -> Result<()> {
     }
 
     let store = Store::open(&config::db_path()).context("failed to open database")?;
+    let run_counts = store.count_all_runs().unwrap_or_default();
 
     println!(
         "{:<10} {:<20} {:<8} {:<8} {:<25} COMMAND",
@@ -20,10 +21,8 @@ pub fn execute() -> Result<()> {
     for job_config in &jobs {
         let job = &job_config.job;
         let name_display = job.name.as_deref().unwrap_or("-");
-        let runs_display = match store.count_runs(&job.id) {
-            Ok((success, total)) => format!("{success}/{total}"),
-            Err(_) => "-".to_string(),
-        };
+        let (success, total) = run_counts.get(&job.id).copied().unwrap_or((0, 0));
+        let runs_display = format!("{success}/{total}");
         println!(
             "{:<10} {:<20} {:<8} {:<8} {:<25} {}",
             job.id,

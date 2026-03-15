@@ -27,11 +27,7 @@ pub fn execute(query: Option<&str>, run_number: usize) -> Result<()> {
         store.get_latest_run()?.context("no runs recorded yet")?
     };
 
-    let display = if run.job_name.is_empty() {
-        &run.job_id
-    } else {
-        &run.job_name
-    };
+    let display = run.display_name();
 
     let exit_code = run
         .exit_code

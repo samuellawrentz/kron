@@ -27,6 +27,18 @@ pub struct RunRecord {
     pub status: RunStatus,
 }
 
+impl RunRecord {
+    /// Display name for this run's job: prefers `job_name`, falls back to `job_id`.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        if self.job_name.is_empty() {
+            &self.job_id
+        } else {
+            &self.job_name
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunStatus {
     Running,
