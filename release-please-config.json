@@ -1,0 +1,14 @@
+{
+  "packages": {
+    ".": {
+      "release-type": "rust",
+      "component": "kron",
+      "bump-minor-pre-major": true,
+      "extra-files": [
+        "crates/kron-cli/Cargo.toml",
+        "crates/kron-core/Cargo.toml",
+        "crates/kron-store/Cargo.toml"
+      ]
+    }
+  }
+}

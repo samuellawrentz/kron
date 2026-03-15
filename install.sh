@@ -22,6 +22,12 @@ main() {
     say "Downloading $url"
     download "$url" "$tmpdir/${artifact}.tar.gz"
 
+    checksum_url="${url}.sha256"
+    say "Downloading checksum $checksum_url"
+    download "$checksum_url" "$tmpdir/${artifact}.tar.gz.sha256"
+
+    verify_checksum "$tmpdir/${artifact}.tar.gz" "$tmpdir/${artifact}.tar.gz.sha256"
+
     tar xzf "$tmpdir/${artifact}.tar.gz" -C "$tmpdir"
 
     mkdir -p "$INSTALL_DIR"
@@ -80,6 +86,33 @@ download() {
     else
         err "curl or wget is required"
     fi
+}
+
+verify_checksum() {
+    file="$1"
+    checksum_file="$2"
+
+    say "Verifying checksum"
+
+    if command -v sha256sum > /dev/null 2>&1; then
+        # sha256sum expects: <hash>  <filename> — rewrite the stored hash line
+        # against the local filename so it works regardless of path in the file
+        expected="$(awk '{print $1}' "$checksum_file")"
+        actual="$(sha256sum "$file" | awk '{print $1}')"
+    elif command -v shasum > /dev/null 2>&1; then
+        expected="$(awk '{print $1}' "$checksum_file")"
+        actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+    else
+        err "sha256sum or shasum is required for checksum verification"
+    fi
+
+    if [ "$actual" != "$expected" ]; then
+        err "checksum mismatch — download may be corrupt or tampered with
+    expected: $expected
+    actual:   $actual"
+    fi
+
+    say "Checksum verified"
 }
 
 add_to_path() {

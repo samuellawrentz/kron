@@ -123,7 +123,7 @@ impl Scheduler {
         let name = def.name.clone();
         let command = def.command.clone();
         let working_dir = def.working_dir.clone();
-        let timeout = def.timeout.as_deref().map(parse_duration);
+        let timeout = def.timeout.as_deref().and_then(parse_duration);
 
         let name_clone = name.clone();
         let span_name = name.clone();
@@ -276,28 +276,28 @@ impl Drop for RunningGuard {
 }
 
 /// Parse a duration string. Supports bare seconds or suffixed "s", "m", "h".
-/// Returns `None` if the string cannot be parsed.
-fn parse_duration(s: &str) -> Duration {
+/// Returns `None` if the string cannot be parsed, and logs a warning.
+fn parse_duration(s: &str) -> Option<Duration> {
     if let Some(rest) = s.strip_suffix('h')
         && let Ok(n) = rest.parse::<u64>()
     {
-        return Duration::from_secs(n * 3600);
+        return Some(Duration::from_secs(n * 3600));
     }
     if let Some(rest) = s.strip_suffix('m')
         && let Ok(n) = rest.parse::<u64>()
     {
-        return Duration::from_secs(n * 60);
+        return Some(Duration::from_secs(n * 60));
     }
     if let Some(rest) = s.strip_suffix('s')
         && let Ok(n) = rest.parse::<u64>()
     {
-        return Duration::from_secs(n);
+        return Some(Duration::from_secs(n));
     }
     if let Ok(n) = s.parse::<u64>() {
-        return Duration::from_secs(n);
+        return Some(Duration::from_secs(n));
     }
-    // Fallback: 0 means no effective timeout
-    Duration::from_secs(0)
+    warn!(value = %s, "invalid timeout value, ignoring (no timeout will be applied)");
+    None
 }
 
 fn reload_jobs() -> Vec<CachedJob> {
@@ -345,17 +345,23 @@ mod tests {
 
     #[test]
     fn test_parse_duration_seconds() {
-        assert_eq!(parse_duration("30"), Duration::from_secs(30));
-        assert_eq!(parse_duration("30s"), Duration::from_secs(30));
+        assert_eq!(parse_duration("30"), Some(Duration::from_secs(30)));
+        assert_eq!(parse_duration("30s"), Some(Duration::from_secs(30)));
     }
 
     #[test]
     fn test_parse_duration_minutes() {
-        assert_eq!(parse_duration("5m"), Duration::from_secs(300));
+        assert_eq!(parse_duration("5m"), Some(Duration::from_secs(300)));
     }
 
     #[test]
     fn test_parse_duration_hours() {
-        assert_eq!(parse_duration("1h"), Duration::from_secs(3600));
+        assert_eq!(parse_duration("1h"), Some(Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn test_parse_duration_invalid() {
+        assert_eq!(parse_duration("invalid"), None);
+        assert_eq!(parse_duration(""), None);
     }
 }

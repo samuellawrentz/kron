@@ -6,6 +6,9 @@ pub enum CoreError {
     #[error("job not found: {name}")]
     JobNotFound { name: String },
 
+    #[error("invalid job name '{name}': {reason}")]
+    InvalidJobName { name: String, reason: String },
+
     #[error("config error: {0}")]
     Config(String),
 

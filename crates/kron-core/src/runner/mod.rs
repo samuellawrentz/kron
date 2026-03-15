@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -5,6 +6,20 @@ use tokio::process::Command;
 use tracing::{Instrument, info, info_span};
 
 use crate::error::CoreError;
+
+/// Maximum number of bytes captured from stdout or stderr per run.
+pub const MAX_OUTPUT_BYTES: usize = 1_048_576; // 1 MiB
+
+/// Truncate `output` to at most `MAX_OUTPUT_BYTES`, appending a note if truncated.
+fn truncate_output(output: String) -> String {
+    if output.len() <= MAX_OUTPUT_BYTES {
+        return output;
+    }
+    let total = output.len();
+    let mut truncated = output[..MAX_OUTPUT_BYTES].to_owned();
+    let _ = write!(truncated, "\n... [truncated, {total} bytes total]");
+    truncated
+}
 
 pub struct JobOutput {
     pub exit_code: Option<i32>,
@@ -54,8 +69,8 @@ pub async fn execute_command(
 
         Ok(JobOutput {
             exit_code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stdout: truncate_output(String::from_utf8_lossy(&output.stdout).into_owned()),
+            stderr: truncate_output(String::from_utf8_lossy(&output.stderr).into_owned()),
             started_at,
             finished_at,
             success: output.status.success(),
@@ -104,5 +119,22 @@ mod tests {
     async fn test_execute_timeout() {
         let result = execute_command("sleep 10", None, Some(Duration::from_millis(100))).await;
         assert!(matches!(result, Err(CoreError::Timeout(_))));
+    }
+
+    #[test]
+    fn test_truncate_output_short() {
+        let input = "hello world".to_string();
+        let result = truncate_output(input.clone());
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_truncate_output_long() {
+        let total = MAX_OUTPUT_BYTES + 100;
+        let input = "x".repeat(total);
+        let result = truncate_output(input);
+        assert!(result.len() > MAX_OUTPUT_BYTES);
+        assert!(result.starts_with(&"x".repeat(MAX_OUTPUT_BYTES)));
+        assert!(result.contains(&format!("[truncated, {total} bytes total]")));
     }
 }

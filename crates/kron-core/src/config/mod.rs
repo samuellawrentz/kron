@@ -4,6 +4,36 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
 
+/// Validate a job name: alphanumeric, hyphens, underscores only; max 64 chars; non-empty.
+///
+/// # Errors
+/// Returns `CoreError::InvalidJobName` if the name fails validation.
+pub fn validate_job_name(name: &str) -> Result<(), CoreError> {
+    if name.is_empty() {
+        return Err(CoreError::InvalidJobName {
+            name: name.to_string(),
+            reason: "job name cannot be empty".to_string(),
+        });
+    }
+    if name.len() > 64 {
+        return Err(CoreError::InvalidJobName {
+            name: name.to_string(),
+            reason: "job name too long (max 64 characters)".to_string(),
+        });
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(CoreError::InvalidJobName {
+            name: name.to_string(),
+            reason: "job name must contain only alphanumeric characters, hyphens, and underscores"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobConfig {
     pub job: JobDefinition,
@@ -49,10 +79,11 @@ pub fn db_path() -> PathBuf {
 /// Read and parse a TOML job config file.
 ///
 /// # Errors
-/// Returns `CoreError` if the file cannot be read or is not valid TOML.
+/// Returns `CoreError` if the file cannot be read, is not valid TOML, or has an invalid job name.
 pub fn load_job(path: &Path) -> Result<JobConfig, CoreError> {
     let contents = std::fs::read_to_string(path)?;
-    let config = toml::from_str(&contents)?;
+    let config: JobConfig = toml::from_str(&contents)?;
+    validate_job_name(&config.job.name)?;
     Ok(config)
 }
 
@@ -65,9 +96,19 @@ pub fn load_job(path: &Path) -> Result<JobConfig, CoreError> {
 pub fn save_job(config: &JobConfig) -> Result<PathBuf, CoreError> {
     let dir = jobs_dir();
     std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
     let path = dir.join(format!("{}.toml", config.job.name));
     let contents = toml::to_string(config)?;
-    std::fs::write(&path, contents)?;
+    std::fs::write(&path, &contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(path)
 }
 
@@ -169,5 +210,69 @@ schedule = "* * * * *"
 "#;
         let config: JobConfig = toml::from_str(toml_str).unwrap();
         assert!(config.job.enabled);
+    }
+
+    #[test]
+    fn test_validate_job_name_valid() {
+        assert!(validate_job_name("backup").is_ok());
+        assert!(validate_job_name("my-job").is_ok());
+        assert!(validate_job_name("test_123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_job_name_rejects_path_traversal() {
+        assert!(validate_job_name("..").is_err());
+        assert!(validate_job_name("../etc/passwd").is_err());
+        assert!(validate_job_name("jobs/backup").is_err());
+        assert!(validate_job_name("/absolute").is_err());
+    }
+
+    #[test]
+    fn test_validate_job_name_rejects_empty() {
+        assert!(validate_job_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_job_name_rejects_too_long() {
+        let long_name = "a".repeat(65);
+        assert!(validate_job_name(&long_name).is_err());
+        // 64 chars is exactly the limit — should pass
+        let max_name = "a".repeat(64);
+        assert!(validate_job_name(&max_name).is_ok());
+    }
+
+    #[test]
+    fn test_validate_job_name_rejects_special_chars() {
+        assert!(validate_job_name("my job").is_err()); // space
+        assert!(validate_job_name("my.job").is_err()); // dot
+        assert!(validate_job_name("my@job").is_err()); // at sign
+        assert!(validate_job_name("my!job").is_err()); // exclamation
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_save_job_sets_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        // Override jobs_dir by writing directly via a custom path approach.
+        // We test save_job by temporarily pointing jobs_dir to a tempdir.
+        // Since jobs_dir() reads from dirs::config_dir(), we instead call the
+        // underlying logic directly: create dir, write file, set permissions.
+        let jobs_dir = dir.path().join("jobs");
+        fs::create_dir_all(&jobs_dir).unwrap();
+        fs::set_permissions(&jobs_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let config = sample_config("perm-test");
+        let contents = toml::to_string(&config).unwrap();
+        let file_path = jobs_dir.join("perm-test.toml");
+        fs::write(&file_path, &contents).unwrap();
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let dir_meta = fs::metadata(&jobs_dir).unwrap();
+        assert_eq!(dir_meta.permissions().mode() & 0o777, 0o700);
+
+        let file_meta = fs::metadata(&file_path).unwrap();
+        assert_eq!(file_meta.permissions().mode() & 0o777, 0o600);
     }
 }

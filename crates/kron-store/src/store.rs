@@ -94,8 +94,32 @@ impl Store {
                     Some(format!("failed to create data directory: {e}")),
                 ))
             })?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).map_err(
+                    |e| {
+                        StoreError::Database(rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(14),
+                            Some(format!("failed to set data directory permissions: {e}")),
+                        ))
+                    },
+                )?;
+            }
         }
         let conn = Connection::open(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(
+                |e| {
+                    StoreError::Database(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(14),
+                        Some(format!("failed to set database file permissions: {e}")),
+                    ))
+                },
+            )?;
+        }
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys = ON;")?;
         let mut store = Self { conn };
         store.run_migrations()?;
@@ -397,5 +421,18 @@ mod tests {
         // Runs persist independently (no FK) — queried by job_name
         let runs = store.list_runs("backup", 10).unwrap();
         assert_eq!(runs.len(), 1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_store_sets_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("kron.db");
+        let _store = Store::open(&db_path).unwrap();
+
+        let meta = std::fs::metadata(&db_path).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
     }
 }

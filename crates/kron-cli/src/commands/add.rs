@@ -1,23 +1,7 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use croner::Cron;
 
-use kron_core::config::{self, JobConfig, JobDefinition};
-
-fn validate_job_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("job name cannot be empty");
-    }
-    if name.len() > 64 {
-        bail!("job name too long (max 64 characters)");
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        bail!("job name must contain only alphanumeric characters, hyphens, and underscores");
-    }
-    Ok(())
-}
+use kron_core::config::{self, JobConfig, JobDefinition, validate_job_name};
 
 #[allow(clippy::needless_pass_by_value)]
 pub fn execute(
