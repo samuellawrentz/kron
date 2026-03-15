@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO="samm/kron"
+REPO="samuellawrentz/kron"
 INSTALL_DIR="${KRON_INSTALL_DIR:-$HOME/.local/bin}"
 
 main() {
