@@ -4,10 +4,15 @@ use crate::error::CoreError;
 ///
 /// # Errors
 /// Returns `CoreError::Notification` if the request fails or the API returns an error status.
-pub async fn send(token: &str, chat_id: &str, subject: &str, body: &str) -> Result<(), CoreError> {
+pub async fn send(
+    client: &reqwest::Client,
+    token: &str,
+    chat_id: &str,
+    subject: &str,
+    body: &str,
+) -> Result<(), CoreError> {
     let url = format!("https://api.telegram.org/bot{token}/sendMessage");
     let text = format!("*{subject}*\n{body}");
-    let client = reqwest::Client::new();
     let resp = client
         .post(&url)
         .json(&serde_json::json!({

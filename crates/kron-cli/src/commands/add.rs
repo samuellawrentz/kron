@@ -11,13 +11,10 @@ use kron_core::config::{self, JobConfig, JobDefinition, generate_short_id, valid
 /// (present only when a conversion was performed).
 fn resolve_schedule(schedule: &str) -> Result<(String, Option<String>)> {
     // Try as a direct cron expression first.
-    if Cron::new(schedule).parse().is_ok() {
-        return Ok((schedule.to_owned(), None));
-    }
-    let cron_parse_err = Cron::new(schedule)
-        .parse()
-        .err()
-        .map_or_else(|| "invalid cron expression".to_owned(), |e| e.to_string());
+    let cron_parse_err = match Cron::new(schedule).parse() {
+        Ok(_) => return Ok((schedule.to_owned(), None)),
+        Err(e) => e.to_string(),
+    };
 
     // Fall back to english-to-cron.
     let converted = english_to_cron::str_cron_syntax(schedule).map_err(|_| {

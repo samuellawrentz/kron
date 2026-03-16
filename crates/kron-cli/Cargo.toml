@@ -17,6 +17,7 @@ clap = { workspace = true }
 kron-core = { path = "../kron-core" }
 kron-store = { path = "../kron-store" }
 croner = { workspace = true }
+reqwest = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }

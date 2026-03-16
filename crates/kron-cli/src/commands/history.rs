@@ -13,7 +13,7 @@ pub fn execute(query: Option<&str>, count: usize) -> Result<()> {
         let job = &job_config.job;
 
         let runs = store
-            .list_runs(&job.id, count)
+            .list_runs_summary(&job.id, count)
             .context("failed to list runs")?;
         let display = job.name.as_deref().unwrap_or(&job.id).to_string();
         (runs, display)
@@ -22,7 +22,7 @@ pub fn execute(query: Option<&str>, count: usize) -> Result<()> {
         let latest = store.get_latest_run()?.context("no runs recorded yet")?;
         let display = latest.display_name().to_string();
         let runs = store
-            .list_runs(&latest.job_id, count)
+            .list_runs_summary(&latest.job_id, count)
             .context("failed to list runs")?;
         (runs, display)
     };

@@ -4,8 +4,12 @@ use crate::error::CoreError;
 ///
 /// # Errors
 /// Returns `CoreError::Notification` if the request fails or the server returns an error status.
-pub async fn send(url: &str, subject: &str, body: &str) -> Result<(), CoreError> {
-    let client = reqwest::Client::new();
+pub async fn send(
+    client: &reqwest::Client,
+    url: &str,
+    subject: &str,
+    body: &str,
+) -> Result<(), CoreError> {
     let resp = client
         .post(url)
         .json(&serde_json::json!({

@@ -4,9 +4,13 @@ use crate::error::CoreError;
 ///
 /// # Errors
 /// Returns `CoreError::Notification` if the request fails or the webhook returns an error status.
-pub async fn send(webhook_url: &str, subject: &str, body: &str) -> Result<(), CoreError> {
+pub async fn send(
+    client: &reqwest::Client,
+    webhook_url: &str,
+    subject: &str,
+    body: &str,
+) -> Result<(), CoreError> {
     let text = format!("*{subject}*\n{body}");
-    let client = reqwest::Client::new();
     let resp = client
         .post(webhook_url)
         .json(&serde_json::json!({ "text": text }))

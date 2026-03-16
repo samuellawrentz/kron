@@ -1,29 +1,24 @@
 use anyhow::{Context, Result};
 use kron_core::config::{self, AlertConfig, AlertProvider};
 
-pub fn add_telegram(token: String, chat_id: String) -> Result<()> {
+fn add_provider(provider: AlertProvider, description: &str) -> Result<()> {
     let mut cfg = config::load_alerts().unwrap_or(AlertConfig { provider: vec![] });
-    cfg.provider
-        .push(AlertProvider::Telegram { token, chat_id });
+    cfg.provider.push(provider);
     config::save_alerts(&cfg).context("failed to save alert config")?;
-    println!("Added Telegram alert provider");
+    println!("Added {description} alert provider");
     Ok(())
+}
+
+pub fn add_telegram(token: String, chat_id: String) -> Result<()> {
+    add_provider(AlertProvider::Telegram { token, chat_id }, "Telegram")
 }
 
 pub fn add_slack(webhook_url: String) -> Result<()> {
-    let mut cfg = config::load_alerts().unwrap_or(AlertConfig { provider: vec![] });
-    cfg.provider.push(AlertProvider::Slack { webhook_url });
-    config::save_alerts(&cfg).context("failed to save alert config")?;
-    println!("Added Slack alert provider");
-    Ok(())
+    add_provider(AlertProvider::Slack { webhook_url }, "Slack")
 }
 
 pub fn add_webhook(url: String) -> Result<()> {
-    let mut cfg = config::load_alerts().unwrap_or(AlertConfig { provider: vec![] });
-    cfg.provider.push(AlertProvider::Webhook { url });
-    config::save_alerts(&cfg).context("failed to save alert config")?;
-    println!("Added webhook alert provider");
-    Ok(())
+    add_provider(AlertProvider::Webhook { url }, "webhook")
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -65,8 +60,10 @@ pub async fn test_alerts() -> Result<()> {
         "Sending test notification to {} provider(s)...",
         cfg.provider.len()
     );
+    let client = reqwest::Client::new();
     for provider in &cfg.provider {
         match kron_core::notify::send_alert(
+            &client,
             provider,
             "kron test alert",
             "This is a test notification from kron.",

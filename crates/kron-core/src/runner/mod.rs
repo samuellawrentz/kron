@@ -16,7 +16,8 @@ fn truncate_output(output: String) -> String {
         return output;
     }
     let total = output.len();
-    let mut truncated = output[..MAX_OUTPUT_BYTES].to_owned();
+    let safe_boundary = output.floor_char_boundary(MAX_OUTPUT_BYTES);
+    let mut truncated = output[..safe_boundary].to_owned();
     let _ = write!(truncated, "\n... [truncated, {total} bytes total]");
     truncated
 }
@@ -185,5 +186,26 @@ mod tests {
         assert!(result.len() > MAX_OUTPUT_BYTES);
         assert!(result.starts_with(&"x".repeat(MAX_OUTPUT_BYTES)));
         assert!(result.contains(&format!("[truncated, {total} bytes total]")));
+    }
+
+    #[test]
+    fn test_truncate_output_multibyte_boundary() {
+        // Place a 3-byte char (€ = U+20AC) right at the boundary so a naive
+        // byte slice would land inside the character.
+        let mut s = "a".repeat(MAX_OUTPUT_BYTES - 1);
+        s.push('\u{20AC}'); // 3 bytes — straddles the boundary
+        s.push_str("tail");
+        let total = s.len();
+        let result = truncate_output(s); // must not panic
+        assert!(result.contains("[truncated,"));
+        assert!(result.contains(&format!("{total} bytes total")));
+    }
+
+    #[test]
+    fn test_truncate_output_exact_boundary() {
+        // Exactly MAX_OUTPUT_BYTES should not be truncated
+        let input = "z".repeat(MAX_OUTPUT_BYTES);
+        let result = truncate_output(input.clone());
+        assert_eq!(result, input);
     }
 }

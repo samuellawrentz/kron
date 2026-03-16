@@ -26,6 +26,7 @@ english-to-cron = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 croner = "2"
+futures = "0.3"
 dirs = "6"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rusqlite_migration = "1"

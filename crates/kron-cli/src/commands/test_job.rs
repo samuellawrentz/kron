@@ -26,7 +26,7 @@ pub async fn execute(job_query: &str) -> Result<()> {
         &job.command,
         job.working_dir.as_deref(),
         None, // no timeout for dry-run
-        None, // env_vars: use job env if available
+        job.env.as_ref(),
     )
     .await?;
 

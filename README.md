@@ -2,13 +2,21 @@
   <img src="assets/kron-mascot.png" width="400" alt="kron mascot — the Clockwork Owl" />
 </p>
 
-# kron
+<h1 align="center">kron</h1>
 
-**Cron, but it actually tells you what happened.**
+<p align="center"><strong>Cron, supercharged. Written in Rust. Single binary. Zero config.</strong></p>
 
-Your backup script ran at 3am. Did it work? How long did it take? What did it print? Cron doesn't know. Cron doesn't care. You'll find out Monday morning when someone asks where the data went.
+<p align="center">
+  <a href="#install">Install</a> · <a href="#quick-start">Quick Start</a> · <a href="#why-not-just-cron">Why kron?</a> · <a href="#for-llms">For AI Agents</a>
+</p>
 
-kron is a modern cron replacement that captures every run — stdout, stderr, exit code, duration — and puts it one command away. No log file plumbing. No sendmail archaeology. No surprises.
+---
+
+Your backup script ran at 3am. Did it work? How long did it take? What did it print?
+
+Cron doesn't know. Cron doesn't care. You'll find out Monday morning when someone asks where the data went.
+
+**kron fixes this.** Every run is captured — stdout, stderr, exit code, duration — and put one command away. No log file plumbing. No sendmail archaeology. No surprises.
 
 ```
 $ kron history backup
@@ -21,7 +29,21 @@ $ kron logs backup --run 3
 STDERR: pg_dump: error: connection to server failed: timeout
 ```
 
-That's it. That's the pitch.
+### Why devs and AI agents pick kron
+
+- **Single binary, zero dependencies** — `curl | sh` and you're done. No Python, no Node, no Docker.
+- **Written in Rust** — 4 MB binary, ~1 MB RSS, 7ms cold start. Faster than cron, lighter than everything else.
+- **Automatic observability** — every run logged to SQLite with stdout, stderr, exit code, and duration. No setup.
+- **Full run history** — `kron history` and `kron logs` give you exactly what happened and when.
+- **Human-readable schedules** — `"every day at 2am"` works alongside standard cron syntax.
+- **Environment snapshots** — capture env vars at job creation with `--capture-env`, replay them at runtime. No more stripped PATH.
+- **Instant alerts** — Telegram, Slack, and webhook notifications on failure (or success). Per-job control.
+- **Overlap prevention** — jobs won't pile up. If the last run is still going, the next trigger is skipped.
+- **Per-job timeouts** — `timeout = "30m"` kills runaway processes.
+- **Hot-reload config** — edit TOML files, the daemon picks up changes in seconds. No restart needed.
+- **Agent-friendly** — deterministic CLI output, file-based config, every command accepts ID or name. Built to be scripted.
+- **Dry-run with `kron test`** — execute a job without recording, see exactly what would happen.
+- **Import from crontab** — `kron import` reads your existing crontab and converts entries interactively.
 
 ---
 

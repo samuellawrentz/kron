@@ -12,6 +12,7 @@ workspace = true
 chrono = { workspace = true }
 croner = { workspace = true }
 dirs = { workspace = true }
+futures = { workspace = true }
 kron-store = { path = "../kron-store" }
 reqwest = { workspace = true }
 serde = { workspace = true }

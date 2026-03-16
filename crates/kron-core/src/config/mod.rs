@@ -115,7 +115,7 @@ pub fn validate_job_name(name: &str) -> Result<(), CoreError> {
 /// Generate a short 8-character hex ID from a UUID.
 #[must_use]
 pub fn generate_short_id() -> String {
-    uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string()
+    uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,12 +268,16 @@ pub fn delete_job_file(id: &str) -> Result<(), CoreError> {
 /// # Errors
 /// Returns `CoreError` if jobs cannot be loaded.
 pub fn find_job(query: &str) -> Result<Option<JobConfig>, CoreError> {
-    let jobs = load_all_jobs()?;
-    // First try exact ID match
-    if let Some(job) = jobs.iter().find(|j| j.job.id == query) {
-        return Ok(Some(job.clone()));
+    // Fast path: job files are named {id}.toml, so try a direct read first.
+    let candidate = jobs_dir().join(format!("{query}.toml"));
+    if candidate.exists() {
+        return Ok(Some(load_job(&candidate)?));
     }
-    // Then try ID prefix match (so users can type just first few chars)
+
+    // Fallback: prefix match and name match require a full scan.
+    let jobs = load_all_jobs()?;
+
+    // ID prefix match (so users can type just the first few chars)
     let prefix_matches: Vec<_> = jobs
         .iter()
         .filter(|j| j.job.id.starts_with(query))

@@ -39,6 +39,31 @@ impl RunRecord {
     }
 }
 
+/// Metadata-only view of a run — no stdout/stderr.
+/// Use for list/history/status displays to avoid loading large output blobs.
+#[derive(Debug, Clone)]
+pub struct RunSummary {
+    pub id: String,
+    pub job_id: String,
+    pub job_name: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub exit_code: Option<i32>,
+    pub status: RunStatus,
+}
+
+impl RunSummary {
+    /// Display name for this run's job: prefers `job_name`, falls back to `job_id`.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        if self.job_name.is_empty() {
+            &self.job_id
+        } else {
+            &self.job_name
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunStatus {
     Running,

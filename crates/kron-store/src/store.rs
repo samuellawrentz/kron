@@ -4,7 +4,7 @@ use rusqlite::{Connection, Row, params};
 use rusqlite_migration::{M, Migrations};
 
 use crate::error::StoreError;
-use crate::models::{JobRecord, RunRecord, RunStatus};
+use crate::models::{JobRecord, RunRecord, RunStatus, RunSummary};
 
 const MIGRATIONS: &[M<'static>] = &[
     M::up(
@@ -98,6 +98,35 @@ fn run_from_row(row: &Row) -> rusqlite::Result<RunRecord> {
         exit_code: row.get(5)?,
         stdout: row.get(6)?,
         stderr: row.get(7)?,
+        status: RunStatus::parse(&status_str),
+    })
+}
+
+fn run_summary_from_row(row: &Row) -> rusqlite::Result<RunSummary> {
+    let started_at_str: String = row.get(3)?;
+    let finished_at_str: Option<String> = row.get(4)?;
+    let status_str: String = row.get(6)?;
+
+    let started_at = started_at_str
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap_or_else(|_| {
+            tracing::warn!(value = %started_at_str, "failed to parse started_at, using epoch");
+            chrono::DateTime::<chrono::Utc>::UNIX_EPOCH
+        });
+    let finished_at = finished_at_str.and_then(|s| {
+        s.parse::<chrono::DateTime<chrono::Utc>>().ok().or_else(|| {
+            tracing::warn!(value = %s, "failed to parse finished_at");
+            None
+        })
+    });
+
+    Ok(RunSummary {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        job_name: row.get(2)?,
+        started_at,
+        finished_at,
+        exit_code: row.get(5)?,
         status: RunStatus::parse(&status_str),
     })
 }
@@ -365,6 +394,55 @@ impl Store {
         }
     }
 
+    /// List runs for a job without loading stdout/stderr — suitable for history/status displays.
+    pub fn list_runs_summary(
+        &self,
+        job_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RunSummary>, StoreError> {
+        let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, job_id, job_name, started_at, finished_at, exit_code, status
+             FROM runs
+             WHERE job_id = ?1 OR job_name = ?1
+             ORDER BY started_at DESC
+             LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(params![job_id, limit_i64], run_summary_from_row)?;
+
+        let mut runs = Vec::new();
+        for row in rows {
+            runs.push(row?);
+        }
+        Ok(runs)
+    }
+
+    /// Return the most recent run summary for every job in a single query.
+    /// The returned map is keyed by `job_id`.
+    pub fn get_last_run_all_jobs(
+        &self,
+    ) -> Result<std::collections::HashMap<String, RunSummary>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT r.id, r.job_id, r.job_name, r.started_at, r.finished_at, r.exit_code, r.status
+             FROM runs r
+             INNER JOIN (
+                 SELECT job_id, MAX(started_at) AS max_started
+                 FROM runs
+                 GROUP BY job_id
+             ) latest ON r.job_id = latest.job_id AND r.started_at = latest.max_started",
+        )?;
+
+        let rows = stmt.query_map([], run_summary_from_row)?;
+
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let summary = row?;
+            map.insert(summary.job_id.clone(), summary);
+        }
+        Ok(map)
+    }
+
     /// Get the most recent run for a job. Queries by `job_id` OR `job_name` for backward compat.
     pub fn get_last_run(&self, job_id: &str) -> Result<Option<RunRecord>, StoreError> {
         let result = self.conn.query_row(
@@ -567,6 +645,84 @@ mod tests {
         // Runs persist independently (no FK) — queried by job_id
         let runs = store.list_runs("aaaaaaaa", 10).unwrap();
         assert_eq!(runs.len(), 1);
+    }
+
+    #[test]
+    fn test_list_runs_summary() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        let mut run = make_run(&job, RunStatus::Success);
+        run.stdout = "lots of output".to_string();
+        run.stderr = "some errors".to_string();
+        store.insert_run(&run).unwrap();
+
+        let summaries = store.list_runs_summary("aaaaaaaa", 10).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].job_id, "aaaaaaaa");
+        assert_eq!(summaries[0].status, RunStatus::Success);
+    }
+
+    #[test]
+    fn test_list_runs_summary_respects_limit() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        for _ in 0..5 {
+            let run = make_run(&job, RunStatus::Success);
+            store.insert_run(&run).unwrap();
+        }
+
+        let summaries = store.list_runs_summary("aaaaaaaa", 3).unwrap();
+        assert_eq!(summaries.len(), 3);
+    }
+
+    #[test]
+    fn test_get_last_run_all_jobs() {
+        let store = Store::open_in_memory().unwrap();
+        let job1 = make_job("aaaaaaaa", Some("backup"));
+        let job2 = make_job("bbbbbbbb", Some("cleanup"));
+        store.insert_job(&job1).unwrap();
+        store.insert_job(&job2).unwrap();
+
+        let run1 = make_run(&job1, RunStatus::Success);
+        let run2 = make_run(&job2, RunStatus::Failed);
+        store.insert_run(&run1).unwrap();
+        store.insert_run(&run2).unwrap();
+
+        let map = store.get_last_run_all_jobs().unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("aaaaaaaa").unwrap().status, RunStatus::Success);
+        assert_eq!(map.get("bbbbbbbb").unwrap().status, RunStatus::Failed);
+    }
+
+    #[test]
+    fn test_get_last_run_all_jobs_empty() {
+        let store = Store::open_in_memory().unwrap();
+        let map = store.get_last_run_all_jobs().unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_get_last_run_all_jobs_picks_latest() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        // Insert a failed run, then a success run
+        let mut run1 = make_run(&job, RunStatus::Failed);
+        run1.started_at = chrono::Utc::now() - chrono::Duration::seconds(60);
+        store.insert_run(&run1).unwrap();
+
+        let run2 = make_run(&job, RunStatus::Success);
+        store.insert_run(&run2).unwrap();
+
+        let map = store.get_last_run_all_jobs().unwrap();
+        assert_eq!(map.len(), 1);
+        // Should pick the latest (success), not the earlier (failed)
+        assert_eq!(map.get("aaaaaaaa").unwrap().status, RunStatus::Success);
     }
 
     #[test]

@@ -37,8 +37,10 @@ pub async fn execute(query: &str) -> Result<()> {
         .insert_run(&run)
         .context("failed to record run start")?;
 
-    // TODO: parse job.timeout string into Duration when a duration-parsing crate is added
-    let timeout = None;
+    let timeout = job
+        .timeout
+        .as_deref()
+        .and_then(kron_core::scheduler::parse_duration);
 
     // Execute
     let output = runner::execute_command(

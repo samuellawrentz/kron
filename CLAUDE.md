@@ -52,6 +52,10 @@ crates/
   kron-store/            # SQLite storage layer
 ```
 
+## Coding Guidelines
+
+Always use `/rust-skills` proactively when writing, reviewing, or refactoring Rust code.
+
 ## Development
 
 ```bash

@@ -11,6 +11,7 @@ pub fn execute() -> Result<()> {
     }
 
     let store = Store::open(&config::db_path()).context("failed to open database")?;
+    let last_runs = store.get_last_run_all_jobs().unwrap_or_default();
 
     println!(
         "{:<10} {:<20} {:<10} {:<12} {:<20}",
@@ -21,7 +22,7 @@ pub fn execute() -> Result<()> {
     for job_config in &jobs {
         let job = &job_config.job;
         let name_display = job.name.as_deref().unwrap_or("-");
-        let last_run = store.get_last_run(&job.id)?;
+        let last_run = last_runs.get(&job.id);
         match last_run {
             Some(run) => {
                 let duration = run.finished_at.map_or_else(

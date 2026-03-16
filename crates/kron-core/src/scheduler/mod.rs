@@ -343,7 +343,7 @@ impl Drop for RunningGuard {
 
 /// Parse a duration string. Supports bare seconds or suffixed "s", "m", "h".
 /// Returns `None` if the string cannot be parsed, and logs a warning.
-fn parse_duration(s: &str) -> Option<Duration> {
+pub fn parse_duration(s: &str) -> Option<Duration> {
     if let Some(rest) = s.strip_suffix('h')
         && let Ok(n) = rest.parse::<u64>()
     {
