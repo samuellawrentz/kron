@@ -245,6 +245,7 @@ cargo clippy --all-targets
 - [ ] Web dashboard
 - [x] `kron test` (dry-run)
 - [ ] Automatic history cleanup / retention policy
+- [ ] Dead-man switch alerts (`on_silence` — alert if a job hasn't run in expected time)
 
 ---
 

@@ -69,6 +69,22 @@ impl Scheduler {
                             cached_jobs = jobs;
                         }
                         last_reload = Instant::now();
+
+                        // Prune old runs based on retention policy
+                        if let Ok(global_config) = config::load_global_config() {
+                            let retention = &global_config.retention;
+                            let s = Arc::clone(&self.store);
+                            let max_runs = retention.max_runs_per_job;
+                            let max_days = retention.max_age_days;
+                            let _ = tokio::task::spawn_blocking(move || {
+                                let store = s.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                                match store.prune_runs(max_runs, max_days) {
+                                    Ok(0) => {},
+                                    Ok(n) => tracing::info!(deleted = n, "pruned old run records"),
+                                    Err(e) => tracing::warn!("failed to prune runs: {e}"),
+                                }
+                            }).await;
+                        }
                     }
                     self.tick(&cached_jobs, &mut last_check);
                 }

@@ -482,6 +482,42 @@ impl Store {
         }
     }
 
+    /// Delete old runs based on retention policy.
+    /// Returns the number of rows deleted.
+    pub fn prune_runs(
+        &self,
+        max_runs_per_job: usize,
+        max_age_days: u32,
+    ) -> Result<usize, StoreError> {
+        let mut total_deleted = 0;
+
+        // Delete runs older than max_age_days
+        if max_age_days > 0 {
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(max_age_days));
+            let deleted = self.conn.execute(
+                "DELETE FROM runs WHERE started_at < ?1",
+                params![cutoff.to_rfc3339()],
+            )?;
+            total_deleted += deleted;
+        }
+
+        // Delete excess runs per job (keep only the most recent max_runs_per_job)
+        if max_runs_per_job > 0 {
+            let limit_i64 = i64::try_from(max_runs_per_job).unwrap_or(i64::MAX);
+            let deleted = self.conn.execute(
+                "DELETE FROM runs WHERE id IN (
+                    SELECT r.id FROM runs r
+                    WHERE (SELECT COUNT(*) FROM runs r2
+                           WHERE r2.job_id = r.job_id AND r2.started_at >= r.started_at) > ?1
+                )",
+                params![limit_i64],
+            )?;
+            total_deleted += deleted;
+        }
+
+        Ok(total_deleted)
+    }
+
     /// Get the most recent run for a job. Queries by `job_id` OR `job_name` for backward compat.
     pub fn get_last_run(&self, job_id: &str) -> Result<Option<RunRecord>, StoreError> {
         let result = self.conn.query_row(
@@ -824,6 +860,90 @@ mod tests {
         assert_eq!(map.len(), 1);
         // Should pick the latest (success), not the earlier (failed)
         assert_eq!(map.get("aaaaaaaa").unwrap().status, RunStatus::Success);
+    }
+
+    #[test]
+    fn test_prune_runs_empty_table() {
+        let store = Store::open_in_memory().unwrap();
+        let deleted = store.prune_runs(100, 30).unwrap();
+        assert_eq!(deleted, 0);
+    }
+
+    #[test]
+    fn test_prune_runs_by_age() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        // Insert an old run (40 days ago — beyond the 30-day default)
+        let mut old_run = make_run(&job, RunStatus::Success);
+        old_run.started_at = Utc::now() - chrono::Duration::days(40);
+        store.insert_run(&old_run).unwrap();
+
+        // Insert a recent run
+        let recent_run = make_run(&job, RunStatus::Success);
+        store.insert_run(&recent_run).unwrap();
+
+        let deleted = store.prune_runs(100, 30).unwrap();
+        assert_eq!(deleted, 1);
+
+        let runs = store.list_runs("aaaaaaaa", 10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, recent_run.id);
+    }
+
+    #[test]
+    fn test_prune_runs_keeps_most_recent_per_job() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        // Insert 5 runs with distinct timestamps
+        let mut run_ids = Vec::new();
+        for i in 0..5u64 {
+            let mut run = make_run(&job, RunStatus::Success);
+            run.started_at =
+                Utc::now() - chrono::Duration::seconds(i64::try_from(i * 10 + 1).unwrap());
+            run_ids.push(run.id.clone());
+            store.insert_run(&run).unwrap();
+        }
+
+        // Keep only the 3 most recent (max_runs_per_job = 3)
+        let deleted = store.prune_runs(3, 0).unwrap();
+        assert_eq!(deleted, 2);
+
+        let runs = store.list_runs("aaaaaaaa", 10).unwrap();
+        assert_eq!(runs.len(), 3);
+    }
+
+    #[test]
+    fn test_prune_runs_per_job_independent() {
+        let store = Store::open_in_memory().unwrap();
+        let job1 = make_job("aaaaaaaa", Some("backup"));
+        let job2 = make_job("bbbbbbbb", Some("cleanup"));
+        store.insert_job(&job1).unwrap();
+        store.insert_job(&job2).unwrap();
+
+        // Insert 4 runs for job1 and 2 runs for job2 with distinct timestamps
+        for i in 0..4u64 {
+            let mut run = make_run(&job1, RunStatus::Success);
+            run.started_at =
+                Utc::now() - chrono::Duration::seconds(i64::try_from(i * 10 + 1).unwrap());
+            store.insert_run(&run).unwrap();
+        }
+        for i in 0..2u64 {
+            let mut run = make_run(&job2, RunStatus::Success);
+            run.started_at =
+                Utc::now() - chrono::Duration::seconds(i64::try_from(i * 10 + 1).unwrap());
+            store.insert_run(&run).unwrap();
+        }
+
+        // Keep max 3 per job — job1 loses 1, job2 keeps all 2
+        let deleted = store.prune_runs(3, 0).unwrap();
+        assert_eq!(deleted, 1);
+
+        assert_eq!(store.list_runs("aaaaaaaa", 10).unwrap().len(), 3);
+        assert_eq!(store.list_runs("bbbbbbbb", 10).unwrap().len(), 2);
     }
 
     #[test]

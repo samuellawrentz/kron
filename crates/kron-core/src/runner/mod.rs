@@ -51,6 +51,7 @@ pub async fn execute_command(
 
         let mut cmd = Command::new("sh");
         cmd.args(["-c", command]);
+        cmd.kill_on_drop(true);
 
         if let Some(dir) = working_dir {
             cmd.current_dir(dir);

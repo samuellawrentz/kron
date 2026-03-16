@@ -217,6 +217,53 @@ fn run_command(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+fn is_daemon_running() -> Option<u32> {
+    let pid_path = kron_core::config::data_dir().join("daemon.pid");
+    let pid_str = std::fs::read_to_string(&pid_path).ok()?;
+    let pid: u32 = pid_str.trim().parse().ok()?;
+    #[cfg(target_os = "linux")]
+    {
+        let proc_path = format!("/proc/{pid}");
+        if std::path::Path::new(&proc_path).exists() {
+            return Some(pid);
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        use std::time::SystemTime;
+        let meta = std::fs::metadata(&pid_path).ok()?;
+        let age = SystemTime::now()
+            .duration_since(meta.modified().ok()?)
+            .ok()?;
+        if age.as_secs() < 3600 {
+            Some(pid)
+        } else {
+            None
+        }
+    }
+}
+
+pub fn stop() -> Result<()> {
+    let pid_path = kron_core::config::data_dir().join("daemon.pid");
+    let pid_str =
+        std::fs::read_to_string(&pid_path).context("no PID file found — is the daemon running?")?;
+    let pid: u32 = pid_str.trim().parse().context("invalid PID file")?;
+
+    let status = StdCommand::new("kill")
+        .arg(pid.to_string())
+        .status()
+        .context("failed to send stop signal")?;
+    if !status.success() {
+        anyhow::bail!("failed to stop daemon (pid {pid}) — process may not be running");
+    }
+
+    let _ = std::fs::remove_file(&pid_path);
+
+    println!("kron daemon stopped (pid {pid}).");
+    Ok(())
+}
+
 pub async fn execute(foreground: bool) -> Result<()> {
     if !foreground {
         // Re-launch as a background process
@@ -225,6 +272,13 @@ pub async fn execute(foreground: bool) -> Result<()> {
         // Ensure data directory exists
         let data_dir = kron_core::config::data_dir();
         std::fs::create_dir_all(&data_dir).context("failed to create data directory")?;
+
+        // Refuse to start if daemon is already running
+        if let Some(pid) = is_daemon_running() {
+            anyhow::bail!(
+                "kron daemon is already running (pid {pid}). Stop it first with 'kron daemon stop'."
+            );
+        }
 
         // Open a log file for daemon output
         let log_path = data_dir.join("daemon.log");

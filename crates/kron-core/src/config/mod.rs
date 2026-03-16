@@ -41,6 +41,67 @@ fn default_on_failure() -> bool {
     true
 }
 
+// ---------------------------------------------------------------------------
+// Global kron configuration
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GlobalConfig {
+    #[serde(default)]
+    pub retention: RetentionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetentionConfig {
+    /// Maximum number of runs to keep per job (default: 100)
+    #[serde(default = "default_max_runs_per_job")]
+    pub max_runs_per_job: usize,
+    /// Maximum age of runs in days (default: 30)
+    #[serde(default = "default_max_age_days")]
+    pub max_age_days: u32,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            max_runs_per_job: default_max_runs_per_job(),
+            max_age_days: default_max_age_days(),
+        }
+    }
+}
+
+fn default_max_runs_per_job() -> usize {
+    100
+}
+fn default_max_age_days() -> u32 {
+    30
+}
+
+/// Returns the path to the global kron config file: `~/.config/kron/config.toml`.
+#[must_use]
+pub fn global_config_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from(".config"))
+        .join("kron")
+        .join("config.toml")
+}
+
+/// Load the global kron configuration.
+///
+/// Returns default config if the file does not exist.
+///
+/// # Errors
+/// Returns `CoreError` if the file exists but cannot be read or parsed.
+pub fn load_global_config() -> Result<GlobalConfig, CoreError> {
+    let path = global_config_path();
+    if !path.exists() {
+        return Ok(GlobalConfig::default());
+    }
+    let contents = std::fs::read_to_string(&path)?;
+    let config: GlobalConfig = toml::from_str(&contents)?;
+    Ok(config)
+}
+
 /// Returns the path to the global alerts config file: `~/.config/kron/alerts.toml`.
 #[must_use]
 pub fn alerts_config_path() -> PathBuf {
@@ -76,9 +137,19 @@ pub fn save_alerts(config: &AlertConfig) -> Result<(), CoreError> {
     let path = alerts_config_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
     }
     let contents = toml::to_string(config)?;
     std::fs::write(&path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(())
 }
 
