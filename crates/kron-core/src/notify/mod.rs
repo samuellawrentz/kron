@@ -43,25 +43,3 @@ pub async fn notify_all(providers: &[AlertProvider], subject: &str, body: &str) 
         .collect();
     futures::future::join_all(futures).await;
 }
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use crate::config::AlertProvider;
-
-    #[test]
-    fn test_send_alert_dispatches_correctly() {
-        // Just verify the match arms compile and the function signature is correct
-        let _telegram = AlertProvider::Telegram {
-            token: "test".to_string(),
-            chat_id: "123".to_string(),
-        };
-        let _slack = AlertProvider::Slack {
-            webhook_url: "https://test.com".to_string(),
-        };
-        let _webhook = AlertProvider::Webhook {
-            url: "https://test.com".to_string(),
-        };
-        // Type-checking test — if this compiles, dispatch is correct
-    }
-}

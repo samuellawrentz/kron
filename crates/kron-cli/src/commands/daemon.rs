@@ -246,17 +246,27 @@ fn find_running_daemon() -> Option<u32> {
     None
 }
 
-fn is_daemon_running() -> Option<u32> {
-    // First, check the PID file and verify the process is actually alive.
-    let pid_path = kron_core::config::data_dir().join("daemon.pid");
-    if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
+/// Check whether a PID file at `pid_path` references a live process.
+/// Returns `Some(pid)` if the process is alive, otherwise cleans up the stale
+/// file and returns `None`.
+fn check_pid_file(pid_path: &std::path::Path) -> Option<u32> {
+    if let Ok(pid_str) = std::fs::read_to_string(pid_path)
         && let Ok(pid) = pid_str.trim().parse::<u32>()
     {
         if is_process_alive(pid) {
             return Some(pid);
         }
         // PID file is stale — clean it up.
-        let _ = std::fs::remove_file(&pid_path);
+        let _ = std::fs::remove_file(pid_path);
+    }
+    None
+}
+
+fn is_daemon_running() -> Option<u32> {
+    // First, check the PID file and verify the process is actually alive.
+    let pid_path = kron_core::config::data_dir().join("daemon.pid");
+    if let Some(pid) = check_pid_file(&pid_path) {
+        return Some(pid);
     }
 
     // Fallback: scan for any running kron daemon process (catches daemons
@@ -413,65 +423,43 @@ mod tests {
         );
     }
 
-    // NOTE: `is_daemon_running` and `find_running_daemon` read from a fixed path
-    // (`kron_core::config::data_dir().join("daemon.pid")`) and invoke `pgrep`,
-    // which makes them difficult to unit-test without side-effects on real
-    // system state. The tests below cover the cases that can be exercised
-    // safely; full coverage requires integration tests that control the data dir.
-
-    /// When no PID file exists at the data dir path, `is_daemon_running` should
-    /// return None (assuming no `kron daemon --foreground` process is running
-    /// in the test environment).
-    ///
-    /// WARNING: this test may produce a false failure if a kron daemon is
-    /// actually running on the machine during the test run.
     #[test]
-    fn test_is_daemon_running_no_pid_file() {
-        let pid_path = kron_core::config::data_dir().join("daemon.pid");
+    fn test_check_pid_file_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("daemon.pid");
+        assert!(check_pid_file(&pid_path).is_none());
+    }
 
-        // Only run this assertion when there is genuinely no PID file and no
-        // daemon process active, to avoid interfering with a live daemon.
-        if pid_path.exists() {
-            // A real daemon may be running; skip rather than risk a false failure.
-            return;
-        }
+    #[test]
+    fn test_check_pid_file_stale_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("daemon.pid");
 
-        // With no PID file and (presumably) no matching process, the result
-        // must be None.
-        let result = is_daemon_running();
+        // Write a PID that is guaranteed to be dead.
+        std::fs::write(&pid_path, "99999999").unwrap();
+
+        let result = check_pid_file(&pid_path);
+        assert!(result.is_none(), "dead PID should return None");
         assert!(
-            result.is_none(),
-            "expected None when no daemon is running, got pid {result:?}"
+            !pid_path.exists(),
+            "stale PID file should have been cleaned up"
         );
     }
 
     #[test]
-    fn test_is_daemon_running_stale_pid_file() {
-        let pid_path = kron_core::config::data_dir().join("daemon.pid");
+    fn test_check_pid_file_alive_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("daemon.pid");
 
-        // Skip if a real PID file already exists to avoid clobbering a live daemon.
-        if pid_path.exists() {
-            return;
-        }
+        // Write our own PID — guaranteed to be alive.
+        let our_pid = std::process::id();
+        std::fs::write(&pid_path, our_pid.to_string()).unwrap();
 
-        // Write a PID that is guaranteed to be dead (same extreme value used above).
-        let dead_pid: u32 = 99_999_999;
-        std::fs::create_dir_all(kron_core::config::data_dir()).expect("failed to create data dir");
-        std::fs::write(&pid_path, dead_pid.to_string()).expect("failed to write stale PID file");
-
-        let result = is_daemon_running();
-
-        // The stale PID file must have been removed.
+        let result = check_pid_file(&pid_path);
+        assert_eq!(result, Some(our_pid));
         assert!(
-            !pid_path.exists(),
-            "stale PID file should have been cleaned up by is_daemon_running"
-        );
-
-        // And no daemon should be reported as running (barring a real one found
-        // by pgrep, which is unlikely in CI).
-        assert!(
-            result.is_none(),
-            "expected None after cleaning stale PID file, got pid {result:?}"
+            pid_path.exists(),
+            "PID file should not be removed for live process"
         );
     }
 }
