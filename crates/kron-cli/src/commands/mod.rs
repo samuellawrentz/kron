@@ -4,6 +4,7 @@ use clap::Subcommand;
 mod add;
 mod alert;
 mod daemon;
+mod edit;
 mod history;
 mod import;
 mod list;
@@ -100,6 +101,32 @@ pub enum Command {
         /// Job ID or name
         job: String,
     },
+    /// Edit a job in-place (preserves ID and history)
+    Edit {
+        /// Job name or ID prefix
+        job: String,
+        /// New cron schedule
+        #[arg(long)]
+        schedule: Option<String>,
+        /// New command
+        #[arg(long)]
+        command: Option<String>,
+        /// New job name
+        #[arg(long)]
+        name: Option<String>,
+        /// New timeout (e.g., "5m", "1h", or "none" to clear)
+        #[arg(long)]
+        timeout: Option<String>,
+        /// New working directory
+        #[arg(long)]
+        working_dir: Option<String>,
+        /// Enable the job
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Disable the job
+        #[arg(long, conflicts_with = "enable")]
+        disable: bool,
+    },
     /// Remove a job
     Remove {
         /// Job ID or name
@@ -151,6 +178,25 @@ pub async fn run(cmd: Command) -> Result<()> {
         Command::Logs { job, run } => logs::execute(job.as_deref(), run),
         Command::Run { job } => run_job::execute(&job).await,
         Command::Test { job } => test_job::execute(&job).await,
+        Command::Edit {
+            job,
+            schedule,
+            command,
+            name,
+            timeout,
+            working_dir,
+            enable,
+            disable,
+        } => edit::execute(edit::EditArgs {
+            query: &job,
+            schedule,
+            command,
+            name,
+            timeout,
+            working_dir,
+            enable,
+            disable,
+        }),
         Command::Remove { job } => remove::execute(&job),
         Command::Import { all } => import::execute(all),
         Command::Daemon(daemon_cmd) => match daemon_cmd {
