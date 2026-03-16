@@ -443,6 +443,45 @@ impl Store {
         Ok(map)
     }
 
+    /// List recent run summaries across all jobs, ordered by most recent first.
+    pub fn list_all_runs_summary(&self, limit: usize) -> Result<Vec<RunSummary>, StoreError> {
+        let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, job_id, job_name, started_at, finished_at, exit_code, status
+             FROM runs
+             ORDER BY started_at DESC
+             LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![limit_i64], run_summary_from_row)?;
+
+        let mut runs = Vec::new();
+        for row in rows {
+            runs.push(row?);
+        }
+        Ok(runs)
+    }
+
+    /// Get the Nth most recent run across all jobs (1-indexed).
+    /// Returns full `RunRecord` including stdout/stderr.
+    pub fn get_nth_latest_run(&self, n: usize) -> Result<Option<RunRecord>, StoreError> {
+        let offset = i64::try_from(n.saturating_sub(1)).unwrap_or(0);
+        let result = self.conn.query_row(
+            "SELECT id, job_id, job_name, started_at, finished_at, exit_code, stdout, stderr, status
+             FROM runs
+             ORDER BY started_at DESC
+             LIMIT 1 OFFSET ?1",
+            params![offset],
+            run_from_row,
+        );
+
+        match result {
+            Ok(run) => Ok(Some(run)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StoreError::Database(e)),
+        }
+    }
+
     /// Get the most recent run for a job. Queries by `job_id` OR `job_name` for backward compat.
     pub fn get_last_run(&self, job_id: &str) -> Result<Option<RunRecord>, StoreError> {
         let result = self.conn.query_row(
@@ -677,6 +716,68 @@ mod tests {
 
         let summaries = store.list_runs_summary("aaaaaaaa", 3).unwrap();
         assert_eq!(summaries.len(), 3);
+    }
+
+    #[test]
+    fn test_list_all_runs_summary() {
+        let store = Store::open_in_memory().unwrap();
+        let job1 = make_job("aaaaaaaa", Some("backup"));
+        let job2 = make_job("bbbbbbbb", Some("cleanup"));
+        store.insert_job(&job1).unwrap();
+        store.insert_job(&job2).unwrap();
+
+        let run1 = make_run(&job1, RunStatus::Success);
+        let run2 = make_run(&job2, RunStatus::Failed);
+        store.insert_run(&run1).unwrap();
+        store.insert_run(&run2).unwrap();
+
+        let all = store.list_all_runs_summary(10).unwrap();
+        assert_eq!(all.len(), 2);
+        // Most recent first — run2 was inserted after run1
+        assert_eq!(all[0].job_id, "bbbbbbbb");
+        assert_eq!(all[1].job_id, "aaaaaaaa");
+    }
+
+    #[test]
+    fn test_list_all_runs_summary_respects_limit() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        for _ in 0..5 {
+            let run = make_run(&job, RunStatus::Success);
+            store.insert_run(&run).unwrap();
+        }
+
+        let all = store.list_all_runs_summary(3).unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_get_nth_latest_run() {
+        let store = Store::open_in_memory().unwrap();
+        let job1 = make_job("aaaaaaaa", Some("backup"));
+        let job2 = make_job("bbbbbbbb", Some("cleanup"));
+        store.insert_job(&job1).unwrap();
+        store.insert_job(&job2).unwrap();
+
+        let mut run1 = make_run(&job1, RunStatus::Success);
+        run1.started_at = chrono::Utc::now() - chrono::Duration::seconds(60);
+        store.insert_run(&run1).unwrap();
+
+        let run2 = make_run(&job2, RunStatus::Failed);
+        store.insert_run(&run2).unwrap();
+
+        // 1st most recent = run2 (cleanup)
+        let first = store.get_nth_latest_run(1).unwrap().unwrap();
+        assert_eq!(first.job_id, "bbbbbbbb");
+
+        // 2nd most recent = run1 (backup)
+        let second = store.get_nth_latest_run(2).unwrap().unwrap();
+        assert_eq!(second.job_id, "aaaaaaaa");
+
+        // 3rd doesn't exist
+        assert!(store.get_nth_latest_run(3).unwrap().is_none());
     }
 
     #[test]

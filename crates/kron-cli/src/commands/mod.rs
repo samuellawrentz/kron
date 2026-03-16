@@ -76,7 +76,7 @@ pub enum Command {
     Status,
     /// Show run history for a job
     History {
-        /// Job ID or name (defaults to most recent run)
+        /// Job ID or name (shows all jobs if omitted)
         job: Option<String>,
         /// Number of runs to show
         #[arg(short = 'n', long, default_value = "10")]
@@ -84,7 +84,7 @@ pub enum Command {
     },
     /// Show logs from a job run
     Logs {
-        /// Job ID or name (defaults to most recent run)
+        /// Job ID or name (defaults to most recent run across all jobs)
         job: Option<String>,
         /// Run number (1 = most recent)
         #[arg(long, default_value = "1")]

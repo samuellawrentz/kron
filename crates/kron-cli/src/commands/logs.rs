@@ -23,8 +23,10 @@ pub fn execute(query: Option<&str>, run_number: usize) -> Result<()> {
             .nth(run_number - 1)
             .with_context(|| format!("run #{run_number} not found for '{display}'"))?
     } else {
-        // No job specified — show the most recent run across all jobs
-        store.get_latest_run()?.context("no runs recorded yet")?
+        // No job specified — show the Nth most recent run across all jobs
+        store
+            .get_nth_latest_run(run_number)?
+            .context("no runs recorded yet")?
     };
 
     let display = run.display_name();
