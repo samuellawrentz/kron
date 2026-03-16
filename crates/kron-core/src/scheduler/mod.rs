@@ -47,6 +47,8 @@ impl Scheduler {
         // Load jobs initially
         let mut cached_jobs: Vec<CachedJob> = tokio::task::spawn_blocking(reload_jobs)
             .await
+            .ok()
+            .flatten()
             .unwrap_or_default();
 
         loop {
@@ -58,9 +60,14 @@ impl Scheduler {
                 () = tokio::time::sleep(Duration::from_secs(1)) => {
                     // Reload job configs every 10 seconds instead of every tick
                     if last_reload.elapsed() >= Duration::from_secs(10) {
-                        cached_jobs = tokio::task::spawn_blocking(reload_jobs)
+                        let new_jobs = tokio::task::spawn_blocking(reload_jobs)
                             .await
-                            .unwrap_or_default();
+                            .ok()
+                            .flatten();
+                        // Reload failure returns None — keep the old cache.
+                        if let Some(jobs) = new_jobs {
+                            cached_jobs = jobs;
+                        }
                         last_reload = Instant::now();
                     }
                     self.tick(&cached_jobs, &mut last_check);
@@ -359,24 +366,30 @@ fn parse_duration(s: &str) -> Option<Duration> {
     None
 }
 
-fn reload_jobs() -> Vec<CachedJob> {
+/// Reload all job configs from disk.
+/// Returns `Some(jobs)` on success (even if the list is empty — that means zero job files).
+/// Returns `None` on failure so the caller can keep the previous cache.
+fn reload_jobs() -> Option<Vec<CachedJob>> {
     let mut cache = Vec::new();
     match config::load_all_jobs() {
         Ok(configs) => {
             for config in configs {
                 let def = config.job;
-                let job_label = def.name.as_deref().unwrap_or(&def.id).to_string();
                 match Cron::new(&def.schedule).parse() {
                     Ok(cron) => cache.push(CachedJob { def, cron }),
-                    Err(e) => warn!(job = %job_label, "invalid schedule, skipping: {e}"),
+                    Err(e) => {
+                        let job_label = def.name.as_deref().unwrap_or(&def.id);
+                        warn!(job = %job_label, "invalid schedule, skipping: {e}");
+                    }
                 }
             }
+            Some(cache)
         }
         Err(e) => {
             warn!("failed to load job configs: {e}");
+            None
         }
     }
-    cache
 }
 
 #[cfg(test)]

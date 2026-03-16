@@ -228,7 +228,13 @@ pub fn load_all_jobs() -> Result<Vec<JobConfig>, CoreError> {
 
     let mut jobs = Vec::new();
     for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!("failed to read directory entry: {e}");
+                continue;
+            }
+        };
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("toml") {
             match load_job(&path) {
