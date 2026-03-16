@@ -32,7 +32,7 @@ STDERR: pg_dump: error: connection to server failed: timeout
 ### Why devs and AI agents pick kron
 
 - **Single binary, zero dependencies** — `curl | sh` and you're done. No Python, no Node, no Docker.
-- **Written in Rust** — 4 MB binary, ~1 MB RSS, 7ms cold start. Faster than cron, lighter than everything else.
+- **Written in Rust** — 7.4 MB binary, ~7.6 MB RSS, 7ms cold start. Faster than cron, lighter than everything else.
 - **Automatic observability** — every run logged to SQLite with stdout, stderr, exit code, and duration. No setup.
 - **Full run history** — `kron history` and `kron logs` give you exactly what happened and when.
 - **Human-readable schedules** — `"every day at 2am"` works alongside standard cron syntax.
@@ -40,7 +40,8 @@ STDERR: pg_dump: error: connection to server failed: timeout
 - **Instant alerts** — Telegram, Slack, and webhook notifications on failure (or success). Per-job control.
 - **Overlap prevention** — jobs won't pile up. If the last run is still going, the next trigger is skipped.
 - **Per-job timeouts** — `timeout = "30m"` kills runaway processes.
-- **Hot-reload config** — edit TOML files, the daemon picks up changes in seconds. No restart needed.
+- **Instant config reload** — `kron add` and `kron remove` signal the daemon via SIGHUP for instant pickup. Manual TOML edits caught within 60s.
+- **Automatic run pruning** — configurable retention (default: 100 runs/job, 30 days). Database stays lean forever.
 - **Agent-friendly** — deterministic CLI output, file-based config, every command accepts ID or name. Built to be scripted.
 - **Dry-run with `kron test`** — execute a job without recording, see exactly what would happen.
 - **Import from crontab** — `kron import` reads your existing crontab and converts entries interactively.
@@ -113,7 +114,8 @@ kron daemon
 | `kron run <job>` | Force-run a job right now |
 | `kron test <job>` | Dry-run a job (runs but doesn't record) |
 | `kron remove <job>` | Remove a job |
-| `kron daemon` | Start the scheduler (background; `--foreground` for fg) |
+| `kron daemon start` | Start the scheduler (background; `--foreground` for fg) |
+| `kron daemon stop` | Stop the running daemon |
 | `kron alert add-telegram` | Add Telegram alert provider |
 | `kron alert add-slack` | Add Slack alert provider |
 | `kron alert add-webhook` | Add webhook alert provider |
@@ -194,7 +196,7 @@ Alert config is stored at `~/.config/kron/alerts.toml`.
 ~/.local/share/kron/kron.db   ← kron records every run here (SQLite)
 ```
 
-The **daemon** runs in the background by default (`kron daemon`). Use `--foreground` to keep it in the terminal. It ticks every second, checks which jobs match the current time, executes them via `sh -c`, captures all output, and writes the result to SQLite. Jobs won't overlap — if a previous run is still going, the next trigger is skipped. Jobs are identified by short auto-generated IDs (e.g. `7a3f2bc1`); all commands accept job ID, ID prefix, or name.
+The **daemon** uses a next-fire scheduling model — it computes the exact next run time for each job and sleeps until then, with zero wakeups when idle. When you `kron add` or `kron remove` a job, the daemon is signalled via SIGHUP and reloads immediately. Manual TOML edits are picked up within 60 seconds. Jobs won't overlap — if a previous run is still going, the next trigger is skipped. Old runs are automatically pruned based on a configurable retention policy. Jobs are identified by short auto-generated IDs (e.g. `7a3f2bc1`); all commands accept job ID, ID prefix, or name.
 
 The **CLI** reads both the TOML files and the database to show you what's defined and what actually happened.
 
@@ -204,14 +206,15 @@ kron is fast and light. There's no runtime, no garbage collector, no JIT warmup 
 
 | Metric | Value |
 |---|---|
-| Binary size | **4.2 MB** (statically linked, stripped) |
+| Binary size | **7.4 MB** (statically linked, stripped) |
 | Cold start (`kron --help`) | **~7ms** |
 | List jobs (`kron list`) | **~7ms** |
 | Status query (`kron status`) | **~7ms** (includes SQLite read) |
 | Job execution (`kron run`) | **~14ms** overhead (execute + capture + write to DB) |
-| Peak memory | **~1 MB** RSS |
-| Scheduler tick | **1 second** interval, <1ms per tick |
-| Config reload | **10 second** interval (cached, no disk read between reloads) |
+| Daemon RSS | **~7.6 MB** |
+| Scheduling model | **Next-fire** — zero wakeups when idle |
+| Config reload | **Instant** via SIGHUP on add/remove; 60s fallback for manual edits |
+| Run pruning | **Automatic** — 100 runs/job, 30 days (configurable) |
 
 Measured on Linux x86_64 with release build (`lto = true`, `codegen-units = 1`, `strip = true`).
 
@@ -228,7 +231,7 @@ kron-cli   →  kron-core   →  kron-store
                TOML config)
 ```
 
-~1,700 lines of Rust. Async runtime via tokio. Embedded SQLite via rusqlite. No external services required.
+~4,000 lines of Rust. Async runtime via tokio. Embedded SQLite via rusqlite. No external services required.
 
 ## Development
 
@@ -241,10 +244,14 @@ cargo clippy --all-targets
 ## Roadmap
 
 - [x] Notifications (Slack, Telegram, webhooks)
-- [ ] Crontab import/export
+- [x] Crontab import (`kron import`)
+- [ ] Crontab export
 - [ ] Web dashboard
 - [x] `kron test` (dry-run)
-- [ ] Automatic history cleanup / retention policy
+- [x] Automatic history cleanup / retention policy
+- [x] Next-fire scheduling (zero idle wakeups)
+- [x] SIGHUP instant config reload
+- [x] `kron daemon stop`
 - [ ] Dead-man switch alerts (`on_silence` — alert if a job hasn't run in expected time)
 
 ---
@@ -318,15 +325,15 @@ kron daemon --foreground
 
 # The daemon:
 # - Runs in background by default (PID saved to ~/.local/share/kron/daemon.pid)
-# - Checks jobs every 1 second
-# - Reloads TOML configs every 10 seconds (hot-reload, no restart needed)
+# - Uses next-fire scheduling (zero idle wakeups)
+# - Reloads configs instantly on SIGHUP (sent by add/remove); 60s fallback
 # - Prevents job overlap automatically
 # - Captures all stdout/stderr to SQLite
 # - Exits cleanly on SIGTERM/SIGINT
 # - Logs to ~/.local/share/kron/daemon.log
 
 # Stop the daemon
-kill $(cat ~/.local/share/kron/daemon.pid)
+kron daemon stop
 ```
 
 ### File Locations
@@ -334,6 +341,7 @@ kill $(cat ~/.local/share/kron/daemon.pid)
 | Path | Purpose |
 |---|---|
 | `~/.config/kron/jobs/*.toml` | Job definitions (source of truth — create/edit/delete these) |
+| `~/.config/kron/config.toml` | Global settings (retention policy) |
 | `~/.config/kron/alerts.toml` | Alert provider configuration |
 | `~/.local/share/kron/kron.db` | SQLite database (run history — read-only for you, kron manages it) |
 | `~/.local/share/kron/daemon.log` | Daemon output log |
@@ -345,9 +353,9 @@ kill $(cat ~/.local/share/kron/daemon.pid)
 - **Job IDs** are auto-generated 8-character hex strings. The optional `--name` flag adds a human-friendly label. All commands accept job ID, ID prefix, or name.
 - **Human-readable schedules** are supported in `kron add`. They are converted to cron expressions at add time — the TOML file always stores the resolved cron expression.
 - **Exit code 0** = success, anything else = failure. Check with `kron status`.
-- **TOML is the source of truth** for job definitions. Editing files directly is the intended workflow — changes are picked up within 10 seconds by the daemon.
+- **TOML is the source of truth** for job definitions. Editing files directly is the intended workflow — changes are picked up instantly when using CLI commands (via SIGHUP), or within 60 seconds for manual edits.
 - **No job overlap** — if a job is still running when its next trigger fires, the trigger is skipped.
-- **Daemon** runs in background by default. PID is saved to `~/.local/share/kron/daemon.pid`. Stop with `kill $(cat ~/.local/share/kron/daemon.pid)`. Use `--foreground` for foreground mode.
+- **Daemon** runs in background by default. Stop with `kron daemon stop`. Use `--foreground` for foreground mode. Duplicate instances are prevented automatically.
 - **Environment** is inherited from the daemon's parent process, not stripped like cron.
 - **Timeouts** support suffixes: `30` (seconds), `30s`, `5m`, `1h`.
 - **Working directory** can be set per-job via the `working_dir` field.

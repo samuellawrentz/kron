@@ -105,7 +105,7 @@ All timestamps are displayed in local timezone.
 ```bash
 kron history backup
 kron history backup -n 20   # last 20 runs
-kron history                 # defaults to most recently run job
+kron history                 # shows all jobs (most recent first)
 ```
 
 Output:
@@ -122,7 +122,7 @@ Output:
 ```bash
 kron logs backup           # most recent run
 kron logs backup --run 3   # specific run
-kron logs                  # defaults to most recently run job
+kron logs                  # most recent run across all jobs
 ```
 
 Output:
@@ -156,8 +156,9 @@ kron alert remove <index>
 ### Daemon management
 
 ```bash
-kron daemon start              # run scheduler in foreground
+kron daemon start              # run scheduler in background
 kron daemon start --foreground # explicit foreground mode
+kron daemon stop               # stop the running daemon
 kron daemon install            # install as systemd/launchd service
 kron daemon uninstall          # remove system service
 kron daemon status             # check service status
@@ -235,13 +236,29 @@ Common patterns:
 - **Run history**: `~/.local/share/kron/kron.db` (SQLite, WAL mode)
 - **Alert config**: `~/.config/kron/alerts.toml`
 
+## Global Configuration
+
+Optional global settings in `~/.config/kron/config.toml`:
+
+```toml
+[retention]
+max_runs_per_job = 100   # default: 100
+max_age_days = 30        # default: 30
+```
+
+The daemon automatically prunes old runs based on this policy.
+
 ## Built-in Safety Features
 
 - **Overlap prevention**: A job won't start if a previous instance is still running
-- **Timeout**: Jobs can be killed after a configurable duration
+- **Timeout**: Jobs can be killed after a configurable duration (`kill_on_drop` — no orphan processes)
 - **Output capture**: stdout and stderr always recorded (max 1 MiB each), never lost
 - **Graceful shutdown**: SIGINT/SIGTERM cleanly stops the daemon
-- **File permissions**: Job files 0600, jobs dir 0700, DB file 0600
+- **SIGHUP reload**: `kron add`/`kron remove` signal the daemon for instant config pickup
+- **Duplicate prevention**: Daemon refuses to start if another instance is already running
+- **Automatic pruning**: Old runs cleaned up based on retention policy (default: 100 runs/job, 30 days)
+- **File permissions**: Job files 0600, jobs dir 0700, DB file 0600, alerts.toml 0600
+- **Next-fire scheduling**: Zero idle wakeups — daemon sleeps until the next job is due
 
 ## Common Workflows
 
@@ -265,4 +282,4 @@ kron run myjob           # Re-run and record the result
 
 ### Disable a job temporarily
 
-Edit `~/.config/kron/jobs/<id>.toml` and set `enabled = false`. The daemon picks up changes within 10 seconds.
+Edit `~/.config/kron/jobs/<id>.toml` and set `enabled = false`. The daemon picks up manual edits within 60 seconds, or send `kill -HUP $(cat ~/.local/share/kron/daemon.pid)` for instant reload.
