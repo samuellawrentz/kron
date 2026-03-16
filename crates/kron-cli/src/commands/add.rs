@@ -3,6 +3,32 @@ use croner::Cron;
 
 use kron_core::config::{self, JobConfig, JobDefinition, generate_short_id, validate_job_name};
 
+/// Quote a single shell argument using POSIX single-quote wrapping.
+///
+/// Arguments that are safe (alphanumeric + common punctuation) pass through
+/// unchanged. Everything else is wrapped in single quotes with internal
+/// single quotes escaped as `'\''`.
+fn shell_quote(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    if arg
+        .chars()
+        .all(|c| c.is_alphanumeric() || "-_=/.:,@+%".contains(c))
+    {
+        return arg.to_string();
+    }
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
+
+/// Join command arguments into a single shell-safe string.
+fn shell_quote_join(args: &[String]) -> String {
+    args.iter()
+        .map(|a| shell_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Resolve a schedule string into a valid cron expression.
 ///
 /// Tries parsing as a standard cron expression first. If that fails, tries
@@ -56,7 +82,7 @@ pub fn execute(
 ) -> Result<()> {
     let (resolved_schedule, original_english) = resolve_schedule(&schedule)?;
 
-    let command_str = command.join(" ");
+    let command_str = shell_quote_join(&command);
 
     // Validate name if provided
     if let Some(ref n) = name {
@@ -110,4 +136,70 @@ pub fn execute(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple_args_unquoted() {
+        let args = vec!["echo".into(), "hello".into()];
+        assert_eq!(shell_quote_join(&args), "echo hello");
+    }
+
+    #[test]
+    fn args_with_spaces_get_quoted() {
+        let args = vec![
+            "terminal-notifier".into(),
+            "-title".into(),
+            "💧 Hydration Reminder".into(),
+            "-message".into(),
+            "Time to drink some water!".into(),
+            "-sound".into(),
+            "default".into(),
+        ];
+        let result = shell_quote_join(&args);
+        assert_eq!(
+            result,
+            "terminal-notifier -title '💧 Hydration Reminder' -message 'Time to drink some water!' -sound default"
+        );
+    }
+
+    #[test]
+    fn exclamation_mark_preserved() {
+        let args = vec!["echo".into(), "Hello!".into()];
+        assert_eq!(shell_quote_join(&args), "echo 'Hello!'");
+    }
+
+    #[test]
+    fn internal_single_quotes_escaped() {
+        let args = vec!["echo".into(), "it's alive".into()];
+        assert_eq!(shell_quote_join(&args), "echo 'it'\\''s alive'");
+    }
+
+    #[test]
+    fn empty_arg_quoted() {
+        let args = vec!["cmd".into(), String::new(), "arg".into()];
+        assert_eq!(shell_quote_join(&args), "cmd '' arg");
+    }
+
+    #[test]
+    fn shell_metacharacters_quoted() {
+        let args = vec!["echo".into(), "$HOME".into(), "*.txt".into(), "a|b".into()];
+        assert_eq!(shell_quote_join(&args), "echo '$HOME' '*.txt' 'a|b'");
+    }
+
+    #[test]
+    fn safe_punctuation_unquoted() {
+        let args = vec![
+            "/usr/bin/script.sh".into(),
+            "--flag=value".into(),
+            "a,b".into(),
+        ];
+        assert_eq!(
+            shell_quote_join(&args),
+            "/usr/bin/script.sh --flag=value a,b"
+        );
+    }
 }
