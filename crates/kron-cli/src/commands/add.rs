@@ -104,5 +104,10 @@ pub fn execute(
     }
     println!("  Command: {command_str}");
 
+    // Signal the daemon to reload configs immediately
+    if kron_core::scheduler::signal_daemon_reload() {
+        println!("  Daemon notified (config reloaded)");
+    }
+
     Ok(())
 }

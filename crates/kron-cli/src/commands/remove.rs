@@ -14,5 +14,11 @@ pub fn execute(query: &str) -> Result<()> {
     } else {
         println!("Removed job '{}'", job.job.id);
     }
+
+    // Signal the daemon to reload configs immediately
+    if kron_core::scheduler::signal_daemon_reload() {
+        println!("  Daemon notified (config reloaded)");
+    }
+
     Ok(())
 }

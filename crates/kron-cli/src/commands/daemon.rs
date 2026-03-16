@@ -310,24 +310,40 @@ pub async fn execute(foreground: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Foreground mode — existing behavior
+    // Foreground mode
     let store = Store::open(&config::db_path()).context("failed to open database")?;
     let cancel = CancellationToken::new();
     let scheduler = Scheduler::new(store, cancel.clone());
+    let reload_signal = scheduler.reload_handle();
 
-    // Handle SIGINT (Ctrl+C) and SIGTERM
+    // Handle SIGINT (Ctrl+C), SIGTERM (stop), and SIGHUP (reload)
     let cancel_clone = cancel.clone();
     tokio::spawn(async move {
         #[allow(clippy::expect_used)]
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("failed to register SIGTERM handler");
+        #[allow(clippy::expect_used)]
+        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("failed to register SIGHUP handler");
 
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            _ = sigterm.recv() => {},
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("received SIGINT, shutting down");
+                    cancel_clone.cancel();
+                    return;
+                },
+                _ = sigterm.recv() => {
+                    info!("received SIGTERM, shutting down");
+                    cancel_clone.cancel();
+                    return;
+                },
+                _ = sighup.recv() => {
+                    info!("received SIGHUP, triggering config reload");
+                    reload_signal.notify_one();
+                },
+            }
         }
-        info!("received shutdown signal");
-        cancel_clone.cancel();
     });
 
     println!("kron daemon started. Press Ctrl+C to stop.");

@@ -1,10 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use croner::Cron;
 use kron_store::{RunRecord, RunStatus, Store};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, error, info, info_span, warn};
 use uuid::Uuid;
@@ -12,6 +13,10 @@ use uuid::Uuid;
 use crate::config::{self, JobDefinition};
 use crate::error::CoreError;
 use crate::runner;
+
+/// Maximum time to sleep between checking for due jobs.
+/// Acts as a fallback reload interval for manually edited TOML files.
+const MAX_SLEEP_SECS: u64 = 60;
 
 /// Parsed and cached job state to avoid re-reading filesystem and re-parsing cron every tick.
 struct CachedJob {
@@ -23,6 +28,7 @@ pub struct Scheduler {
     store: Arc<Mutex<Store>>,
     cancel: CancellationToken,
     running_jobs: Arc<Mutex<HashSet<String>>>,
+    reload_signal: Arc<Notify>,
 }
 
 impl Scheduler {
@@ -31,18 +37,28 @@ impl Scheduler {
             store: Arc::new(Mutex::new(store)),
             cancel,
             running_jobs: Arc::new(Mutex::new(HashSet::new())),
+            reload_signal: Arc::new(Notify::new()),
         }
     }
 
-    /// Run the scheduler loop. Checks every second for jobs that need to run.
+    /// Get a handle to signal a config reload (e.g., from a SIGHUP handler).
+    #[must_use]
+    pub fn reload_handle(&self) -> Arc<Notify> {
+        Arc::clone(&self.reload_signal)
+    }
+
+    /// Run the scheduler loop using a next-fire model.
+    ///
+    /// Instead of polling every second, computes the next job due time and sleeps
+    /// until then. Wakes early on: cancellation, SIGHUP reload signal, or a
+    /// fallback interval (60s) for picking up manually edited config files.
     ///
     /// # Errors
     /// Returns `CoreError` if a fatal scheduling error occurs.
     pub async fn run(&self) -> Result<(), CoreError> {
-        info!("scheduler started");
+        info!("scheduler started (next-fire model)");
 
-        let mut last_check = HashMap::<String, chrono::DateTime<Utc>>::new();
-        let mut last_reload = Instant::now();
+        let mut last_prune = Instant::now();
 
         // Load jobs initially
         let mut cached_jobs: Vec<CachedJob> = tokio::task::spawn_blocking(reload_jobs)
@@ -51,50 +67,55 @@ impl Scheduler {
             .flatten()
             .unwrap_or_default();
 
+        info!(jobs = cached_jobs.len(), "loaded initial job configs");
+
         loop {
+            // Compute next fire time across all enabled jobs
+            let now = Utc::now();
+            let sleep_duration = compute_next_sleep(&cached_jobs, &now);
+
+            info!(
+                sleep_secs = sleep_duration.as_secs(),
+                "sleeping until next job or reload"
+            );
+
             tokio::select! {
                 () = self.cancel.cancelled() => {
                     info!("scheduler shutting down");
                     return Ok(());
                 }
-                () = tokio::time::sleep(Duration::from_secs(1)) => {
-                    // Reload job configs every 10 seconds instead of every tick
-                    if last_reload.elapsed() >= Duration::from_secs(10) {
-                        let new_jobs = tokio::task::spawn_blocking(reload_jobs)
-                            .await
-                            .ok()
-                            .flatten();
-                        // Reload failure returns None — keep the old cache.
-                        if let Some(jobs) = new_jobs {
-                            cached_jobs = jobs;
-                        }
-                        last_reload = Instant::now();
-
-                        // Prune old runs based on retention policy
-                        if let Ok(global_config) = config::load_global_config() {
-                            let retention = &global_config.retention;
-                            let s = Arc::clone(&self.store);
-                            let max_runs = retention.max_runs_per_job;
-                            let max_days = retention.max_age_days;
-                            let _ = tokio::task::spawn_blocking(move || {
-                                let store = s.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                                match store.prune_runs(max_runs, max_days) {
-                                    Ok(0) => {},
-                                    Ok(n) => tracing::info!(deleted = n, "pruned old run records"),
-                                    Err(e) => tracing::warn!("failed to prune runs: {e}"),
-                                }
-                            }).await;
-                        }
+                () = self.reload_signal.notified() => {
+                    info!("reload signal received, reloading configs");
+                    if let Some(jobs) = reload_jobs_async().await {
+                        cached_jobs = jobs;
+                        info!(jobs = cached_jobs.len(), "reloaded job configs");
                     }
-                    self.tick(&cached_jobs, &mut last_check);
+                }
+                () = tokio::time::sleep(sleep_duration) => {
+                    // Fire due jobs
+                    self.fire_due_jobs(&cached_jobs);
+
+                    // Periodic config reload (every MAX_SLEEP_SECS as fallback)
+                    // This catches manually edited TOML files
+                    if sleep_duration.as_secs() >= MAX_SLEEP_SECS
+                        && let Some(jobs) = reload_jobs_async().await
+                    {
+                        cached_jobs = jobs;
+                    }
+
+                    // Prune old runs every 60 seconds
+                    if last_prune.elapsed() >= Duration::from_secs(60) {
+                        self.prune_old_runs().await;
+                        last_prune = Instant::now();
+                    }
                 }
             }
         }
     }
 
-    fn tick(&self, jobs: &[CachedJob], last_check: &mut HashMap<String, chrono::DateTime<Utc>>) {
+    /// Check all jobs and fire those whose schedule matches the current minute.
+    fn fire_due_jobs(&self, jobs: &[CachedJob]) {
         let now = Utc::now();
-        let now_minute = now.format("%Y-%m-%d %H:%M").to_string();
 
         for cached in jobs {
             let def = &cached.def;
@@ -102,43 +123,50 @@ impl Scheduler {
                 continue;
             }
 
-            // Use job ID as the key for last_check and running_jobs tracking
-            let last = last_check
-                .get(&def.id)
-                .copied()
-                .unwrap_or(chrono::DateTime::<Utc>::UNIX_EPOCH);
-            let last_minute = last.format("%Y-%m-%d %H:%M").to_string();
-
-            if now_minute != last_minute {
-                // Skip if job is already running
-                {
-                    let running = self.running_jobs.lock().unwrap_or_else(|e| {
-                        warn!("running_jobs mutex was poisoned, recovering");
-                        e.into_inner()
-                    });
-                    if running.contains(&def.id) {
-                        let job_label = def.name.as_deref().unwrap_or(&def.id);
-                        info!(job = %job_label, "job already running, skipping tick");
-                        last_check.insert(def.id.clone(), now);
-                        continue;
-                    }
-                }
-
-                match cached.cron.is_time_matching(&now) {
-                    Ok(true) => {
-                        let job_label = def.name.as_deref().unwrap_or(&def.id);
-                        info!(job = %job_label, "triggering job");
-                        self.spawn_job(def);
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        let job_label = def.name.as_deref().unwrap_or(&def.id);
-                        warn!(job = %job_label, "schedule match error: {e}");
-                    }
+            // Skip if job is already running
+            {
+                let running = self.running_jobs.lock().unwrap_or_else(|e| {
+                    warn!("running_jobs mutex was poisoned, recovering");
+                    e.into_inner()
+                });
+                if running.contains(&def.id) {
+                    let job_label = def.name.as_deref().unwrap_or(&def.id);
+                    info!(job = %job_label, "job already running, skipping");
+                    continue;
                 }
             }
 
-            last_check.insert(def.id.clone(), now);
+            match cached.cron.is_time_matching(&now) {
+                Ok(true) => {
+                    let job_label = def.name.as_deref().unwrap_or(&def.id);
+                    info!(job = %job_label, "triggering job");
+                    self.spawn_job(def);
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    let job_label = def.name.as_deref().unwrap_or(&def.id);
+                    warn!(job = %job_label, "schedule match error: {e}");
+                }
+            }
+        }
+    }
+
+    /// Prune old runs based on retention policy.
+    async fn prune_old_runs(&self) {
+        if let Ok(global_config) = config::load_global_config() {
+            let retention = &global_config.retention;
+            let s = Arc::clone(&self.store);
+            let max_runs = retention.max_runs_per_job;
+            let max_days = retention.max_age_days;
+            let _ = tokio::task::spawn_blocking(move || {
+                let store = s.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                match store.prune_runs(max_runs, max_days) {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(deleted = n, "pruned old run records"),
+                    Err(e) => tracing::warn!("failed to prune runs: {e}"),
+                }
+            })
+            .await;
         }
     }
 
@@ -341,6 +369,40 @@ impl Scheduler {
     }
 }
 
+/// Compute how long to sleep until the next job is due.
+/// Returns at most `MAX_SLEEP_SECS` to ensure periodic config reload.
+fn compute_next_sleep(jobs: &[CachedJob], now: &chrono::DateTime<Utc>) -> Duration {
+    let max_sleep = Duration::from_secs(MAX_SLEEP_SECS);
+    let mut earliest = max_sleep;
+
+    for cached in jobs {
+        if !cached.def.enabled {
+            continue;
+        }
+        match cached.cron.find_next_occurrence(now, false) {
+            Ok(next) => {
+                let until = (next - *now).to_std().unwrap_or(Duration::ZERO);
+                if until < earliest {
+                    earliest = until;
+                }
+            }
+            Err(e) => {
+                let job_label = cached.def.name.as_deref().unwrap_or(&cached.def.id);
+                warn!(job = %job_label, "failed to compute next occurrence: {e}");
+            }
+        }
+    }
+
+    // Add a small buffer (1 second) to ensure we land inside the target minute
+    // rather than waking up a fraction of a second early.
+    if earliest > Duration::ZERO && earliest < max_sleep {
+        earliest = earliest.saturating_add(Duration::from_secs(1));
+    }
+
+    // Never sleep less than 1 second to avoid busy-looping
+    earliest.max(Duration::from_secs(1))
+}
+
 /// RAII guard that removes a job ID from `running_jobs` when dropped.
 struct RunningGuard {
     running_jobs: Arc<Mutex<HashSet<String>>>,
@@ -382,6 +444,14 @@ pub fn parse_duration(s: &str) -> Option<Duration> {
     None
 }
 
+/// Reload all job configs from disk (async wrapper for `spawn_blocking`).
+async fn reload_jobs_async() -> Option<Vec<CachedJob>> {
+    tokio::task::spawn_blocking(reload_jobs)
+        .await
+        .ok()
+        .flatten()
+}
+
 /// Reload all job configs from disk.
 /// Returns `Some(jobs)` on success (even if the list is empty — that means zero job files).
 /// Returns `None` on failure so the caller can keep the previous cache.
@@ -408,6 +478,23 @@ fn reload_jobs() -> Option<Vec<CachedJob>> {
     }
 }
 
+/// Send SIGHUP to the running daemon to trigger a config reload.
+/// Returns true if the signal was sent successfully.
+#[must_use]
+pub fn signal_daemon_reload() -> bool {
+    let pid_path = config::data_dir().join("daemon.pid");
+    let Ok(pid_str) = std::fs::read_to_string(&pid_path) else {
+        return false;
+    };
+    let Ok(pid) = pid_str.trim().parse::<u32>() else {
+        return false;
+    };
+    std::process::Command::new("kill")
+        .args(["-HUP", &pid.to_string()])
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -424,7 +511,7 @@ mod tests {
 
         let handle = tokio::spawn(async move { scheduler.run().await });
 
-        // Allow a tick or two
+        // Allow initial setup
         tokio::time::sleep(Duration::from_millis(100)).await;
         cancel.cancel();
 
@@ -452,5 +539,58 @@ mod tests {
     fn test_parse_duration_invalid() {
         assert_eq!(parse_duration("invalid"), None);
         assert_eq!(parse_duration(""), None);
+    }
+
+    #[test]
+    fn test_compute_next_sleep_no_jobs() {
+        let now = Utc::now();
+        let sleep = compute_next_sleep(&[], &now);
+        assert_eq!(sleep.as_secs(), MAX_SLEEP_SECS);
+    }
+
+    #[test]
+    fn test_compute_next_sleep_capped() {
+        // A yearly job should still cap at MAX_SLEEP_SECS
+        let cron = Cron::new("0 0 1 1 *").parse().unwrap();
+        let jobs = vec![CachedJob {
+            def: JobDefinition {
+                id: "test".to_string(),
+                name: None,
+                command: "echo hi".to_string(),
+                schedule: "0 0 1 1 *".to_string(),
+                working_dir: None,
+                enabled: true,
+                timeout: None,
+                env: None,
+                alert: None,
+            },
+            cron,
+        }];
+        let now = Utc::now();
+        let sleep = compute_next_sleep(&jobs, &now);
+        assert!(sleep.as_secs() <= MAX_SLEEP_SECS);
+    }
+
+    #[test]
+    fn test_compute_next_sleep_disabled_job_ignored() {
+        let cron = Cron::new("* * * * *").parse().unwrap();
+        let jobs = vec![CachedJob {
+            def: JobDefinition {
+                id: "test".to_string(),
+                name: None,
+                command: "echo hi".to_string(),
+                schedule: "* * * * *".to_string(),
+                working_dir: None,
+                enabled: false,
+                timeout: None,
+                env: None,
+                alert: None,
+            },
+            cron,
+        }];
+        let now = Utc::now();
+        let sleep = compute_next_sleep(&jobs, &now);
+        // Disabled job ignored, falls back to max sleep
+        assert_eq!(sleep.as_secs(), MAX_SLEEP_SECS);
     }
 }
