@@ -294,6 +294,17 @@ pub fn stop() -> Result<()> {
     Ok(())
 }
 
+pub async fn restart() -> Result<()> {
+    if is_daemon_running().is_some() {
+        stop()?;
+        // Brief pause to let the process fully exit
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    } else {
+        println!("No running daemon found, starting fresh.");
+    }
+    execute(false).await
+}
+
 pub async fn execute(foreground: bool) -> Result<()> {
     if !foreground {
         // Re-launch as a background process

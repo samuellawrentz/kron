@@ -155,6 +155,8 @@ pub enum DaemonCommand {
     },
     /// Stop the running daemon
     Stop,
+    /// Restart the running daemon
+    Restart,
     /// Install as a system service (survives restarts)
     Install,
     /// Uninstall the system service
@@ -202,6 +204,7 @@ pub async fn run(cmd: Command) -> Result<()> {
         Command::Daemon(daemon_cmd) => match daemon_cmd {
             DaemonCommand::Start { foreground } => daemon::execute(foreground).await,
             DaemonCommand::Stop => daemon::stop(),
+            DaemonCommand::Restart => daemon::restart().await,
             DaemonCommand::Install => daemon::install(),
             DaemonCommand::Uninstall => daemon::uninstall(),
             DaemonCommand::Status => daemon::service_status(),

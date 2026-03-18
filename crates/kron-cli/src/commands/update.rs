@@ -22,6 +22,19 @@ pub fn execute() -> Result<()> {
 
     if status.success() {
         println!("kron updated successfully.");
+
+        // Restart daemon if it was running, so it picks up the new binary
+        if let Ok(output) = std::process::Command::new("pgrep")
+            .args(["-f", "kron daemon.*--foreground"])
+            .output()
+            && output.status.success()
+        {
+            println!("Restarting daemon to use updated binary...");
+            let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("kron"));
+            let _ = std::process::Command::new(&exe)
+                .args(["daemon", "restart"])
+                .status();
+        }
     } else {
         bail!(
             "update failed with exit code: {}",

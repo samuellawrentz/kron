@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
+use chrono::{Local, Utc};
 use croner::Cron;
 use kron_store::{RunRecord, RunStatus, Store};
 use tokio::sync::Notify;
@@ -71,7 +71,7 @@ impl Scheduler {
 
         loop {
             // Compute next fire time across all enabled jobs
-            let now = Utc::now();
+            let now = Local::now();
             let sleep_duration = compute_next_sleep(&cached_jobs, &now);
 
             info!(
@@ -115,7 +115,7 @@ impl Scheduler {
 
     /// Check all jobs and fire those whose schedule matches the current minute.
     fn fire_due_jobs(&self, jobs: &[CachedJob]) {
-        let now = Utc::now();
+        let now = Local::now();
 
         for cached in jobs {
             let def = &cached.def;
@@ -371,7 +371,7 @@ impl Scheduler {
 
 /// Compute how long to sleep until the next job is due.
 /// Returns at most `MAX_SLEEP_SECS` to ensure periodic config reload.
-fn compute_next_sleep(jobs: &[CachedJob], now: &chrono::DateTime<Utc>) -> Duration {
+fn compute_next_sleep(jobs: &[CachedJob], now: &chrono::DateTime<Local>) -> Duration {
     let max_sleep = Duration::from_secs(MAX_SLEEP_SECS);
     let mut earliest = max_sleep;
 
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_compute_next_sleep_no_jobs() {
-        let now = Utc::now();
+        let now = Local::now();
         let sleep = compute_next_sleep(&[], &now);
         assert_eq!(sleep.as_secs(), MAX_SLEEP_SECS);
     }
@@ -566,7 +566,7 @@ mod tests {
             },
             cron,
         }];
-        let now = Utc::now();
+        let now = Local::now();
         let sleep = compute_next_sleep(&jobs, &now);
         assert!(sleep.as_secs() <= MAX_SLEEP_SECS);
     }
@@ -588,7 +588,7 @@ mod tests {
             },
             cron,
         }];
-        let now = Utc::now();
+        let now = Local::now();
         let sleep = compute_next_sleep(&jobs, &now);
         // Disabled job ignored, falls back to max sleep
         assert_eq!(sleep.as_secs(), MAX_SLEEP_SECS);
