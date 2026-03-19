@@ -27,7 +27,13 @@ pub fn execute() -> Result<()> {
             "{:<10} {:<20} {:<8} {:<8} {:<25} {}",
             job.id,
             name_display,
-            if job.enabled { "yes" } else { "no" },
+            if job.once {
+                "once"
+            } else if job.enabled {
+                "yes"
+            } else {
+                "no"
+            },
             runs_display,
             job.schedule,
             job.command,

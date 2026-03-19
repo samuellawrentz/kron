@@ -13,6 +13,7 @@ pub struct EditArgs<'a> {
     pub working_dir: Option<String>,
     pub enable: bool,
     pub disable: bool,
+    pub once: Option<bool>,
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -25,6 +26,7 @@ pub fn execute(args: EditArgs<'_>) -> Result<()> {
         && args.working_dir.is_none()
         && !args.enable
         && !args.disable
+        && args.once.is_none()
     {
         anyhow::bail!(
             "nothing to edit — provide at least one flag (--schedule, --command, --name, --timeout, --working-dir, --enable, --disable)"
@@ -112,6 +114,14 @@ pub fn execute(args: EditArgs<'_>) -> Result<()> {
             changes.push("enabled: true -> false".to_string());
         }
         job.job.enabled = false;
+    }
+
+    // Apply once flag
+    if let Some(new_once) = args.once
+        && new_once != job.job.once
+    {
+        changes.push(format!("once: {} -> {}", job.job.once, new_once));
+        job.job.once = new_once;
     }
 
     if changes.is_empty() {

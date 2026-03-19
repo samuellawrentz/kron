@@ -212,6 +212,7 @@ pub fn execute(all: bool) -> Result<()> {
                 timeout: None,
                 env: None,
                 alert: None,
+                once: false,
             },
         };
 

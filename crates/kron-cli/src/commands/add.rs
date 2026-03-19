@@ -79,6 +79,7 @@ pub fn execute(
     name: Option<String>,
     working_dir: Option<String>,
     capture_env: bool,
+    once: bool,
 ) -> Result<()> {
     let (resolved_schedule, original_english) = resolve_schedule(&schedule)?;
 
@@ -114,6 +115,7 @@ pub fn execute(
             timeout: None,
             env,
             alert: None,
+            once,
         },
     };
     let path = config::save_job(&job_config).context("failed to save job config")?;
@@ -129,6 +131,9 @@ pub fn execute(
         println!("  Schedule: {resolved_schedule}");
     }
     println!("  Command: {command_str}");
+    if once {
+        println!("  Once: yes (will auto-remove after running)");
+    }
 
     // Signal the daemon to reload configs immediately
     if kron_core::scheduler::signal_daemon_reload() {

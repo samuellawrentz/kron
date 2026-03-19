@@ -211,6 +211,8 @@ pub struct JobDefinition {
     pub env: Option<HashMap<String, String>>,
     #[serde(default)]
     pub alert: Option<JobAlert>,
+    #[serde(default)]
+    pub once: bool,
 }
 
 fn default_enabled() -> bool {
@@ -382,8 +384,56 @@ mod tests {
                 timeout: None,
                 env: None,
                 alert: None,
+                once: false,
             },
         }
+    }
+
+    #[test]
+    fn test_once_defaults_to_false() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+"#;
+        let config: JobConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.job.once);
+    }
+
+    #[test]
+    fn test_once_roundtrip() {
+        let mut config = sample_config("once-test");
+        config.job.once = true;
+        let serialized = toml::to_string(&config).unwrap();
+        let parsed: JobConfig = toml::from_str(&serialized).unwrap();
+        assert!(parsed.job.once);
+    }
+
+    #[test]
+    fn test_once_explicit_false() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+once = false
+"#;
+        let config: JobConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.job.once);
+    }
+
+    #[test]
+    fn test_once_explicit_true() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+once = true
+"#;
+        let config: JobConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.job.once);
     }
 
     #[test]

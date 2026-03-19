@@ -70,6 +70,9 @@ pub enum Command {
         /// Capture current environment variables
         #[arg(long)]
         capture_env: bool,
+        /// Run this job only once, then auto-remove it
+        #[arg(long)]
+        once: bool,
     },
     /// List all jobs
     List,
@@ -126,6 +129,12 @@ pub enum Command {
         /// Disable the job
         #[arg(long, conflicts_with = "enable")]
         disable: bool,
+        /// Mark as a one-time job (auto-removes after running)
+        #[arg(long, conflicts_with = "no_once")]
+        once: bool,
+        /// Remove the one-time flag
+        #[arg(long, conflicts_with = "once")]
+        no_once: bool,
     },
     /// Remove a job
     Remove {
@@ -173,7 +182,8 @@ pub async fn run(cmd: Command) -> Result<()> {
             name,
             working_dir,
             capture_env,
-        } => add::execute(schedule, command, name, working_dir, capture_env),
+            once,
+        } => add::execute(schedule, command, name, working_dir, capture_env, once),
         Command::List => list::execute(),
         Command::Status => status::execute(),
         Command::History { job, count } => history::execute(job.as_deref(), count),
@@ -189,6 +199,8 @@ pub async fn run(cmd: Command) -> Result<()> {
             working_dir,
             enable,
             disable,
+            once,
+            no_once,
         } => edit::execute(edit::EditArgs {
             query: &job,
             schedule,
@@ -198,6 +210,13 @@ pub async fn run(cmd: Command) -> Result<()> {
             working_dir,
             enable,
             disable,
+            once: if once {
+                Some(true)
+            } else if no_once {
+                Some(false)
+            } else {
+                None
+            },
         }),
         Command::Remove { job } => remove::execute(&job),
         Command::Import { all } => import::execute(all),

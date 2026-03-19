@@ -182,6 +182,7 @@ impl Scheduler {
         let timeout = def.timeout.as_deref().and_then(parse_duration);
         let env_vars = def.env.clone();
         let job_alert = def.alert.clone();
+        let once = def.once;
 
         let job_id_clone = job_id.clone();
         let span_name = job_display_name.clone();
@@ -317,6 +318,19 @@ impl Scheduler {
                         Ok(Err(e)) => error!("failed to record run result: {e}"),
                         Err(e) => error!("spawn_blocking panicked recording run result: {e}"),
                     }
+                }
+
+                // Auto-remove one-time jobs after execution (regardless of outcome)
+                if once {
+                    info!(job = %job_display_name, "one-time job completed, removing job file");
+                    let jid = job_id.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        if let Err(e) = config::delete_job_file(&jid) {
+                            warn!(job = %jid, "failed to remove one-time job file: {e}");
+                        }
+                    })
+                    .await;
+                    let _ = signal_daemon_reload();
                 }
 
                 // Fire alerts based on per-job alert settings
@@ -563,6 +577,7 @@ mod tests {
                 timeout: None,
                 env: None,
                 alert: None,
+                once: false,
             },
             cron,
         }];
@@ -585,6 +600,7 @@ mod tests {
                 timeout: None,
                 env: None,
                 alert: None,
+                once: false,
             },
             cron,
         }];
