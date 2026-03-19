@@ -239,8 +239,63 @@ pub fn db_path() -> PathBuf {
     data_dir().join("kron.db")
 }
 
+/// Returns the path to the `.sh` script file for a given job ID.
+#[must_use]
+pub fn script_path(job_id: &str) -> PathBuf {
+    jobs_dir().join(format!("{job_id}.sh"))
+}
+
+/// Load the `.sh` script content for a job, stripping the shebang line.
+/// Returns `None` if the file does not exist.
+#[must_use]
+pub fn load_script(job_id: &str) -> Option<String> {
+    let path = script_path(job_id);
+    let content = std::fs::read_to_string(path).ok()?;
+    let stripped = if let Some(rest) = content.strip_prefix("#!") {
+        // Skip the shebang line
+        rest.find('\n').map_or("", |idx| &rest[idx + 1..])
+    } else {
+        &content
+    };
+    let trimmed = stripped.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Write a job command as a `.sh` script file.
+///
+/// Creates `#!/bin/bash\n{command}\n` at `jobs_dir()/<id>.sh`.
+///
+/// # Errors
+/// Returns `CoreError` if the file cannot be written.
+pub fn save_script(job_id: &str, command: &str) -> Result<PathBuf, CoreError> {
+    let path = script_path(job_id);
+    let content = format!("#!/bin/bash\n{command}\n");
+    std::fs::write(&path, &content)?;
+    Ok(path)
+}
+
+/// Remove the `.sh` script file for a job if it exists.
+/// Logs a warning for unexpected errors (e.g. permission denied); silently
+/// ignores `NotFound` since the file may never have been created.
+pub fn delete_script(job_id: &str) {
+    let path = script_path(job_id);
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            tracing::warn!(job_id, "failed to remove script file: {e}");
+        }
+    }
+}
+
 /// Read and parse a TOML job config file.
 /// If the config has no `id`, generates one and re-saves the file (backward compat).
+/// If a `.sh` script file exists alongside the TOML, the command from the script
+/// takes precedence over the inline TOML `command` field.
 ///
 /// # Errors
 /// Returns `CoreError` if the file cannot be read, is not valid TOML, or has an invalid job name.
@@ -260,6 +315,11 @@ pub fn load_job(path: &Path) -> Result<JobConfig, CoreError> {
             // Remove old file (best-effort)
             let _ = std::fs::remove_file(path);
         }
+    }
+    // The `.sh` script takes precedence over the TOML `command` field so that
+    // edits made directly to the script file are always honoured at runtime.
+    if let Some(script_command) = load_script(&config.job.id) {
+        config.job.command = script_command;
     }
     Ok(config)
 }
@@ -286,6 +346,10 @@ pub fn save_job(config: &JobConfig) -> Result<PathBuf, CoreError> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
+    // Dual source of truth: the TOML `command` field is kept for backward
+    // compatibility and human-readable display, while the `.sh` file is the
+    // actual execution source (loaded with precedence in `load_job`).
+    save_script(&config.job.id, &config.job.command)?;
     Ok(path)
 }
 
@@ -327,6 +391,8 @@ pub fn load_all_jobs() -> Result<Vec<JobConfig>, CoreError> {
 /// Returns `CoreError::JobNotFound` if the file does not exist, or `CoreError::Io` on failure.
 pub fn delete_job_file(id: &str) -> Result<(), CoreError> {
     let path = jobs_dir().join(format!("{id}.toml"));
+    // Also remove the .sh script file if it exists
+    delete_script(id);
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(CoreError::JobNotFound {
@@ -656,6 +722,76 @@ schedule = "* * * * *"
         let parsed_env = parsed.job.env.unwrap();
         assert_eq!(parsed_env.get("FOO").unwrap(), "bar");
         assert_eq!(parsed_env.get("BAZ").unwrap(), "qux");
+    }
+
+    #[test]
+    fn test_load_script_returns_none_for_missing() {
+        let result = load_script("nonexistent_job_id_12345");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_save_and_load_script_roundtrip() {
+        let id = generate_short_id();
+        let command = "echo 'hello world' && date +%Y-%m-%d";
+
+        save_script(&id, command).unwrap();
+        let loaded = load_script(&id).unwrap();
+        assert_eq!(loaded, command);
+
+        // Cleanup
+        delete_script(&id);
+        assert!(load_script(&id).is_none());
+    }
+
+    #[test]
+    fn test_delete_script_removes_file() {
+        let id = generate_short_id();
+        save_script(&id, "echo test").unwrap();
+        assert!(script_path(&id).exists());
+
+        delete_script(&id);
+        assert!(!script_path(&id).exists());
+    }
+
+    #[test]
+    fn test_delete_script_noop_for_missing() {
+        // Should not panic
+        delete_script("nonexistent_job_id_99999");
+    }
+
+    #[test]
+    fn test_save_job_creates_script_file() {
+        let config = sample_config(&generate_short_id());
+        let path = save_job(&config).unwrap();
+        assert!(path.exists());
+
+        let sh_path = script_path(&config.job.id);
+        assert!(sh_path.exists());
+
+        let script_content = load_script(&config.job.id).unwrap();
+        assert_eq!(script_content, "echo hello");
+
+        // Cleanup
+        delete_job_file(&config.job.id).unwrap();
+        assert!(!sh_path.exists());
+    }
+
+    #[test]
+    fn test_load_job_prefers_script_over_toml_command() {
+        let id = generate_short_id();
+        let config = sample_config(&id);
+        save_job(&config).unwrap();
+
+        // Overwrite the .sh file with a different command
+        save_script(&id, "echo from script").unwrap();
+
+        let toml_path = jobs_dir().join(format!("{id}.toml"));
+        let loaded = load_job(&toml_path).unwrap();
+        assert_eq!(loaded.job.command, "echo from script");
+
+        // Cleanup
+        delete_job_file(&id).unwrap();
     }
 
     #[test]

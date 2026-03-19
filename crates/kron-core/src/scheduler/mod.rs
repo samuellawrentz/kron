@@ -183,6 +183,7 @@ impl Scheduler {
         let env_vars = def.env.clone();
         let job_alert = def.alert.clone();
         let once = def.once;
+        let script = config::script_path(&def.id);
 
         let job_id_clone = job_id.clone();
         let span_name = job_display_name.clone();
@@ -235,9 +236,10 @@ impl Scheduler {
                     }
                 }
 
-                // Execute with optional timeout
-                let result = runner::execute_command(
+                // Execute with optional timeout, preferring .sh script if available
+                let result = runner::execute_command_or_script(
                     &command,
+                    Some(script.as_path()),
                     working_dir.as_deref(),
                     timeout,
                     env_vars.as_ref(),

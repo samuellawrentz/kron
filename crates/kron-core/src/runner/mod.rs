@@ -1,4 +1,5 @@
 use std::fmt::Write as _;
+use std::path::Path;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -31,38 +32,43 @@ pub struct JobOutput {
     pub success: bool,
 }
 
-/// Execute a command and capture its output.
+/// Apply working directory and environment variables to a `Command`.
+fn configure_command(
+    cmd: &mut Command,
+    working_dir: Option<&str>,
+    env_vars: Option<&std::collections::HashMap<String, String>>,
+) {
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+    if let Some(vars) = env_vars {
+        for (key, value) in vars {
+            cmd.env(key, value);
+        }
+    }
+}
+
+/// Drive a fully-configured `Command` to completion, respecting an optional timeout,
+/// and return a `JobOutput`.
+///
+/// The `started_at` timestamp is captured *before* this call so callers control
+/// when timing begins.  `span` is the tracing span to instrument the future under.
 ///
 /// # Errors
 /// Returns `CoreError::Execution` if the process could not be spawned.
 /// Returns `CoreError::Timeout` if the command exceeds the given timeout.
 #[allow(clippy::implicit_hasher)]
-pub async fn execute_command(
-    command: &str,
+async fn run_command(
+    mut cmd: Command,
     working_dir: Option<&str>,
     timeout: Option<Duration>,
     env_vars: Option<&std::collections::HashMap<String, String>>,
+    span: tracing::Span,
 ) -> Result<JobOutput, CoreError> {
     let started_at = Utc::now();
-    let span = info_span!("execute_command", command = %command);
+    configure_command(&mut cmd, working_dir, env_vars);
 
-    async {
-        info!("executing command");
-
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", command]);
-        cmd.kill_on_drop(true);
-
-        if let Some(dir) = working_dir {
-            cmd.current_dir(dir);
-        }
-
-        if let Some(vars) = env_vars {
-            for (key, value) in vars {
-                cmd.env(key, value);
-            }
-        }
-
+    async move {
         let output = if let Some(dur) = timeout {
             match tokio::time::timeout(dur, cmd.output()).await {
                 Ok(Ok(out)) => out,
@@ -88,6 +94,67 @@ pub async fn execute_command(
     }
     .instrument(span)
     .await
+}
+
+/// Execute a command and capture its output.
+///
+/// # Errors
+/// Returns `CoreError::Execution` if the process could not be spawned.
+/// Returns `CoreError::Timeout` if the command exceeds the given timeout.
+#[allow(clippy::implicit_hasher)]
+pub async fn execute_command(
+    command: &str,
+    working_dir: Option<&str>,
+    timeout: Option<Duration>,
+    env_vars: Option<&std::collections::HashMap<String, String>>,
+) -> Result<JobOutput, CoreError> {
+    let span = info_span!("execute_command", command = %command);
+    info!(parent: &span, "executing command");
+
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", command]);
+    cmd.kill_on_drop(true);
+
+    run_command(cmd, working_dir, timeout, env_vars, span).await
+}
+
+/// Execute a job, preferring the `.sh` script file if it exists.
+///
+/// If `script_path` is `Some` and the file exists on disk at call time, runs
+/// `bash <script_path>`.  Otherwise falls back to `sh -c <command>`.
+///
+/// # Design note
+/// The `path.exists()` check is technically a TOCTOU race, but it is acceptable
+/// here: the kron daemon never deletes a job's `.sh` file while the job is
+/// running, and the `--once` deletion happens only *after* execution completes.
+///
+/// # Errors
+/// Returns `CoreError::Execution` if the process could not be spawned.
+/// Returns `CoreError::Timeout` if the command exceeds the given timeout.
+#[allow(clippy::implicit_hasher)]
+pub async fn execute_command_or_script(
+    command: &str,
+    script_path: Option<&Path>,
+    working_dir: Option<&str>,
+    timeout: Option<Duration>,
+    env_vars: Option<&std::collections::HashMap<String, String>>,
+) -> Result<JobOutput, CoreError> {
+    if let Some(path) = script_path
+        && path.exists()
+    {
+        let path_str = path.display().to_string();
+        let span = info_span!("execute_script", script = %path_str);
+        info!(parent: &span, "executing script file");
+
+        let mut cmd = Command::new("bash");
+        cmd.arg(path);
+        cmd.kill_on_drop(true);
+
+        return run_command(cmd, working_dir, timeout, env_vars, span).await;
+    }
+
+    // Fall back to sh -c for inline commands (no script file present)
+    execute_command(command, working_dir, timeout, env_vars).await
 }
 
 #[cfg(test)]
@@ -170,6 +237,59 @@ mod tests {
             .unwrap();
         assert!(output.success);
         assert_eq!(output.stdout.trim(), "alpha-beta");
+    }
+
+    #[tokio::test]
+    async fn test_execute_script_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("test.sh");
+        std::fs::write(&script, "#!/bin/bash\necho from_script\n").unwrap();
+
+        let output =
+            execute_command_or_script("echo fallback", Some(script.as_path()), None, None, None)
+                .await
+                .unwrap();
+        assert!(output.success);
+        assert_eq!(output.stdout.trim(), "from_script");
+    }
+
+    #[tokio::test]
+    async fn test_execute_script_fallback_when_missing() {
+        let missing = std::path::PathBuf::from("/tmp/kron_nonexistent_test.sh");
+        let output =
+            execute_command_or_script("echo fallback", Some(missing.as_path()), None, None, None)
+                .await
+                .unwrap();
+        assert!(output.success);
+        assert_eq!(output.stdout.trim(), "fallback");
+    }
+
+    #[tokio::test]
+    async fn test_execute_script_with_working_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("pwd.sh");
+        std::fs::write(&script, "#!/bin/bash\npwd\n").unwrap();
+
+        let output = execute_command_or_script(
+            "echo fallback",
+            Some(script.as_path()),
+            Some("/tmp"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(output.success);
+        assert!(output.stdout.trim().starts_with("/tmp"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_script_none_path_uses_inline() {
+        let output = execute_command_or_script("echo inline", None, None, None, None)
+            .await
+            .unwrap();
+        assert!(output.success);
+        assert_eq!(output.stdout.trim(), "inline");
     }
 
     #[test]

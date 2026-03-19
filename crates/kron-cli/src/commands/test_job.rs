@@ -22,8 +22,10 @@ pub async fn execute(job_query: &str) -> Result<()> {
     println!();
 
     // Execute the command but DON'T record in database
-    let output = runner::execute_command(
+    let script = config::script_path(&job.id);
+    let output = runner::execute_command_or_script(
         &job.command,
+        Some(script.as_path()),
         job.working_dir.as_deref(),
         None, // no timeout for dry-run
         job.env.as_ref(),

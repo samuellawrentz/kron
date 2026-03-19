@@ -42,9 +42,11 @@ pub async fn execute(query: &str) -> Result<()> {
         .as_deref()
         .and_then(kron_core::scheduler::parse_duration);
 
-    // Execute
-    let output = runner::execute_command(
+    // Execute, preferring .sh script if available
+    let script = config::script_path(&job.id);
+    let output = runner::execute_command_or_script(
         &job.command,
+        Some(script.as_path()),
         job.working_dir.as_deref(),
         timeout,
         job.env.as_ref(),
