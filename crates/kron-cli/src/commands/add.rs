@@ -83,7 +83,15 @@ pub fn execute(
 ) -> Result<()> {
     let (resolved_schedule, original_english) = resolve_schedule(&schedule)?;
 
-    let command_str = shell_quote_join(&command);
+    // When the user passes the command as a single string (e.g. "echo hello"),
+    // use it as-is — it's already a complete shell command.  Only apply
+    // shell_quote_join when there are multiple separate arguments that need
+    // safe escaping and joining.
+    let command_str = if command.len() == 1 {
+        command[0].clone()
+    } else {
+        shell_quote_join(&command)
+    };
 
     // Validate name if provided
     if let Some(ref n) = name {

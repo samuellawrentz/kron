@@ -6,6 +6,15 @@ use chrono::Utc;
 use tokio::process::Command;
 use tracing::{Instrument, info, info_span};
 
+/// Determine the user's login shell for job execution.
+///
+/// Uses `$SHELL` so that shell-specific startup files (`.zshenv`,
+/// `.bash_profile`, etc.) are sourced when running with `-l`.
+/// Falls back to `"sh"` if `$SHELL` is unset.
+fn user_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "sh".into())
+}
+
 use crate::error::CoreError;
 
 /// Maximum number of bytes captured from stdout or stderr per run.
@@ -111,8 +120,9 @@ pub async fn execute_command(
     let span = info_span!("execute_command", command = %command);
     info!(parent: &span, "executing command");
 
-    let mut cmd = Command::new("sh");
-    cmd.args(["-c", command]);
+    let shell = user_shell();
+    let mut cmd = Command::new(&shell);
+    cmd.args(["-l", "-c", command]);
     cmd.kill_on_drop(true);
 
     run_command(cmd, working_dir, timeout, env_vars, span).await
@@ -147,7 +157,7 @@ pub async fn execute_command_or_script(
         info!(parent: &span, "executing script file");
 
         let mut cmd = Command::new("bash");
-        cmd.arg(path);
+        cmd.args([std::ffi::OsStr::new("-l"), path.as_os_str()]);
         cmd.kill_on_drop(true);
 
         return run_command(cmd, working_dir, timeout, env_vars, span).await;

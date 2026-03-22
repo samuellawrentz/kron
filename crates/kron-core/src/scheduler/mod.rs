@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{Local, Utc};
+use chrono::{Local, Timelike, Utc};
 use croner::Cron;
 use kron_store::{RunRecord, RunStatus, Store};
 use tokio::sync::Notify;
@@ -114,8 +114,16 @@ impl Scheduler {
     }
 
     /// Check all jobs and fire those whose schedule matches the current minute.
+    ///
+    /// croner's `is_time_matching` uses second-level granularity — it only
+    /// returns `true` when the seconds component is exactly 0.  We truncate
+    /// the current time to the start of the minute so that the check succeeds
+    /// regardless of which second within the minute we happen to wake up.
     fn fire_due_jobs(&self, jobs: &[CachedJob]) {
-        let now = Local::now();
+        let now = Local::now()
+            .with_second(0)
+            .and_then(|t| t.with_nanosecond(0))
+            .unwrap_or_else(Local::now);
 
         for cached in jobs {
             let def = &cached.def;
@@ -610,5 +618,38 @@ mod tests {
         let sleep = compute_next_sleep(&jobs, &now);
         // Disabled job ignored, falls back to max sleep
         assert_eq!(sleep.as_secs(), MAX_SLEEP_SECS);
+    }
+
+    #[test]
+    fn test_is_time_matching_any_second_in_minute() {
+        // croner's is_time_matching only returns true at second 0.
+        // Verify that our truncation strategy makes matching work at any second.
+        use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+
+        let cron = Cron::new("30 8 * * 1-5").parse().unwrap();
+        let date = NaiveDate::from_ymd_opt(2026, 3, 23).unwrap(); // Monday
+
+        for sec in [0, 1, 15, 30, 59] {
+            let t = Local
+                .from_local_datetime(&NaiveDateTime::new(
+                    date,
+                    NaiveTime::from_hms_opt(8, 30, sec).unwrap(),
+                ))
+                .unwrap();
+
+            // Raw check only passes at second 0
+            if sec == 0 {
+                assert!(cron.is_time_matching(&t).unwrap());
+            } else {
+                assert!(!cron.is_time_matching(&t).unwrap());
+            }
+
+            // Truncated check passes for every second in the minute
+            let truncated = t.with_second(0).unwrap().with_nanosecond(0).unwrap();
+            assert!(
+                cron.is_time_matching(&truncated).unwrap(),
+                "truncated 08:30:{sec:02} should match"
+            );
+        }
     }
 }
