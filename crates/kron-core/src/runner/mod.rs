@@ -156,7 +156,8 @@ pub async fn execute_command_or_script(
         let span = info_span!("execute_script", script = %path_str);
         info!(parent: &span, "executing script file");
 
-        let mut cmd = Command::new("bash");
+        let shell = user_shell();
+        let mut cmd = Command::new(&shell);
         cmd.args([std::ffi::OsStr::new("-l"), path.as_os_str()]);
         cmd.kill_on_drop(true);
 
