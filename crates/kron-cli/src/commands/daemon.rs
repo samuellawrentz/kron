@@ -77,12 +77,15 @@ fn install_systemd(exe_path: &str) -> Result<()> {
         "[Unit]\n\
          Description=kron - cron replacement with built-in observability\n\
          After=network.target\n\
+         StartLimitIntervalSec=120\n\
+         StartLimitBurst=5\n\
          \n\
          [Service]\n\
-         Type=simple\n\
+         Type=notify\n\
          ExecStart={exe_path} daemon start --foreground\n\
-         Restart=on-failure\n\
+         Restart=always\n\
          RestartSec=5\n\
+         WatchdogSec=30\n\
          \n\
          [Install]\n\
          WantedBy=default.target\n"
@@ -401,6 +404,10 @@ pub async fn execute(foreground: bool) -> Result<()> {
     });
 
     println!("kron daemon started (pid {our_pid}). Press Ctrl+C to stop.");
+
+    // Tell systemd we're ready (Type=notify). No-op outside systemd.
+    kron_core::systemd::sd_notify("READY=1");
+
     scheduler.run().await.context("scheduler error")?;
 
     // Clean up PID file on graceful shutdown.

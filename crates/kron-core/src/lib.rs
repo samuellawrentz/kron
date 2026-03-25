@@ -6,5 +6,6 @@ pub mod error;
 pub mod notify;
 pub mod runner;
 pub mod scheduler;
+pub mod systemd;
 
 pub use error::CoreError;

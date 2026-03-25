@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::config::{self, JobDefinition};
 use crate::error::CoreError;
 use crate::runner;
+use crate::systemd;
 
 /// Maximum time to sleep between checking for due jobs.
 /// Acts as a fallback reload interval for manually edited TOML files.
@@ -69,6 +70,11 @@ impl Scheduler {
 
         info!(jobs = cached_jobs.len(), "loaded initial job configs");
 
+        // Watchdog interval: ping systemd every 15s so it knows we're alive.
+        // No-op when not running under systemd (e.g. macOS, manual start).
+        let mut watchdog = tokio::time::interval(Duration::from_secs(15));
+        watchdog.tick().await; // consume the immediate first tick
+
         loop {
             // Compute next fire time across all enabled jobs
             let now = Local::now();
@@ -108,6 +114,9 @@ impl Scheduler {
                         self.prune_old_runs().await;
                         last_prune = Instant::now();
                     }
+                }
+                _ = watchdog.tick() => {
+                    systemd::sd_notify("WATCHDOG=1");
                 }
             }
         }
