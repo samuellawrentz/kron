@@ -170,29 +170,26 @@ impl Scheduler {
 
     /// Prune old runs based on retention policy.
     async fn prune_old_runs(&self) {
-        if let Ok(global_config) = config::load_global_config() {
+        let s = Arc::clone(&self.store);
+        let _ = tokio::task::spawn_blocking(move || {
+            let Ok(global_config) = config::load_global_config() else {
+                return;
+            };
             let retention = &global_config.retention;
-            let s = Arc::clone(&self.store);
-            let max_runs = retention.max_runs_per_job;
-            let max_days = retention.max_age_days;
-            let _ = tokio::task::spawn_blocking(move || {
-                let store = s.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                match store.prune_runs(max_runs, max_days) {
-                    Ok(0) => {}
-                    Ok(n) => tracing::info!(deleted = n, "pruned old run records"),
-                    Err(e) => tracing::warn!("failed to prune runs: {e}"),
-                }
-            })
-            .await;
-        }
+            let store = s.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            match store.prune_runs(retention.max_runs_per_job, retention.max_age_days) {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(deleted = n, "pruned old run records"),
+                Err(e) => tracing::warn!("failed to prune runs: {e}"),
+            }
+        })
+        .await;
     }
 
-    #[allow(clippy::too_many_lines)]
     fn spawn_job(&self, def: &JobDefinition) {
         let store = Arc::clone(&self.store);
         let running_jobs = Arc::clone(&self.running_jobs);
         let job_id = def.id.clone();
-        // Use name for display; fall back to id
         let job_display_name = def.name.clone().unwrap_or_else(|| def.id.clone());
         let command = def.command.clone();
         let working_dir = def.working_dir.clone();
@@ -202,20 +199,10 @@ impl Scheduler {
         let once = def.once;
         let script = config::script_path(&def.id);
 
-        let job_id_clone = job_id.clone();
         let span_name = job_display_name.clone();
         tokio::spawn(
             async move {
-                // Mark job as running by ID
-                {
-                    let mut running = running_jobs.lock().unwrap_or_else(|e| {
-                        warn!("running_jobs mutex was poisoned, recovering");
-                        e.into_inner()
-                    });
-                    running.insert(job_id.clone());
-                }
-
-                // Ensure we remove the job from running_jobs when done
+                mark_running(&running_jobs, &job_id);
                 let _guard = RunningGuard {
                     running_jobs: Arc::clone(&running_jobs),
                     name: job_id.clone(),
@@ -224,36 +211,15 @@ impl Scheduler {
                 let run_id = Uuid::new_v4().to_string();
                 let started_at = Utc::now();
 
-                // Insert run record — job_id is the short ID; job_name is the display name
-                {
-                    let s = Arc::clone(&store);
-                    let run = RunRecord {
-                        id: run_id.clone(),
-                        job_id: job_id_clone.clone(),
-                        job_name: job_display_name.clone(),
-                        started_at,
-                        finished_at: None,
-                        exit_code: None,
-                        stdout: String::new(),
-                        stderr: String::new(),
-                        status: RunStatus::Running,
-                    };
-                    let result = tokio::task::spawn_blocking(move || {
-                        let store = s.lock().unwrap_or_else(|e| {
-                            warn!("store mutex was poisoned, recovering");
-                            e.into_inner()
-                        });
-                        store.insert_run(&run)
-                    })
-                    .await;
-                    match result {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => error!("failed to record run start: {e}"),
-                        Err(e) => error!("spawn_blocking panicked recording run start: {e}"),
-                    }
-                }
+                record_run_start(
+                    &store,
+                    run_id.clone(),
+                    job_id.clone(),
+                    job_display_name.clone(),
+                    started_at,
+                )
+                .await;
 
-                // Execute with optional timeout, preferring .sh script if available
                 let result = runner::execute_command_or_script(
                     &command,
                     Some(script.as_path()),
@@ -263,143 +229,219 @@ impl Scheduler {
                 )
                 .await;
 
-                // Record result
-                let (finished_at, exit_code, stdout, stderr, status) = match result {
-                    Ok(output) => {
-                        let status = if output.success {
-                            RunStatus::Success
-                        } else {
-                            RunStatus::Failed
-                        };
-                        info!(
-                            exit_code = ?output.exit_code,
-                            success = output.success,
-                            "job completed"
-                        );
-                        (
-                            output.finished_at,
-                            output.exit_code,
-                            output.stdout,
-                            output.stderr,
-                            status,
-                        )
-                    }
-                    Err(CoreError::Timeout(dur)) => {
-                        warn!(job = %job_display_name, timeout = ?dur, "job timed out");
-                        (
-                            Utc::now(),
-                            None,
-                            String::new(),
-                            format!("timed out after {dur:?}"),
-                            RunStatus::Failed,
-                        )
-                    }
-                    Err(e) => {
-                        error!("job execution failed: {e}");
-                        (
-                            Utc::now(),
-                            None,
-                            String::new(),
-                            e.to_string(),
-                            RunStatus::Failed,
-                        )
-                    }
-                };
+                let outcome = resolve_outcome(result, &job_display_name);
 
-                // Retain copies needed for alert dispatch before values are moved into RunRecord
-                let status_for_alert = status.clone();
-                let stderr_for_alert = stderr.clone();
+                record_run_result(
+                    &store,
+                    run_id,
+                    &job_id,
+                    &job_display_name,
+                    started_at,
+                    &outcome,
+                )
+                .await;
 
-                // Update run record
-                {
-                    let s = Arc::clone(&store);
-                    let run = RunRecord {
-                        id: run_id,
-                        job_id: job_id_clone,
-                        job_name: job_display_name.clone(),
-                        started_at,
-                        finished_at: Some(finished_at),
-                        exit_code,
-                        stdout,
-                        stderr,
-                        status,
-                    };
-                    let result = tokio::task::spawn_blocking(move || {
-                        let store = s.lock().unwrap_or_else(|e| {
-                            warn!("store mutex was poisoned, recovering");
-                            e.into_inner()
-                        });
-                        store.update_run(&run)
-                    })
-                    .await;
-                    match result {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => error!("failed to record run result: {e}"),
-                        Err(e) => error!("spawn_blocking panicked recording run result: {e}"),
-                    }
-                }
-
-                // Auto-remove one-time jobs after execution (regardless of outcome)
                 if once {
-                    info!(job = %job_display_name, "one-time job completed, removing job file");
-                    let jid = job_id.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        if let Err(e) = config::delete_job_file(&jid) {
-                            warn!(job = %jid, "failed to remove one-time job file: {e}");
-                        }
-                    })
-                    .await;
-                    let _ = signal_daemon_reload();
+                    handle_once_removal(&job_id, &job_display_name).await;
                 }
 
-                // Fire alerts based on per-job alert settings
                 if let Some(ref alert) = job_alert {
-                    let should_alert = match status_for_alert {
-                        RunStatus::Failed => alert.on_failure,
-                        RunStatus::Success => alert.on_success,
-                        RunStatus::Running => false,
-                    };
-                    if should_alert {
-                        match crate::config::load_alerts() {
-                            Ok(alert_config) if !alert_config.provider.is_empty() => {
-                                let display_name = job_display_name.clone();
-                                let cmd = command.clone();
-                                let stderr_snippet = if stderr_for_alert.len() > 500 {
-                                    stderr_for_alert[..500].to_string()
-                                } else {
-                                    stderr_for_alert.clone()
-                                };
-                                let subject = match status_for_alert {
-                                    RunStatus::Failed => {
-                                        format!("kron job failed: {display_name}")
-                                    }
-                                    RunStatus::Success | RunStatus::Running => {
-                                        format!("kron job succeeded: {display_name}")
-                                    }
-                                };
-                                let body = format!(
-                                    "Command: {cmd}\nExit code: {}\nStderr: {stderr_snippet}",
-                                    exit_code
-                                        .map_or_else(|| "unknown".to_string(), |c| c.to_string())
-                                );
-                                tokio::spawn(async move {
-                                    crate::notify::notify_all(
-                                        &alert_config.provider,
-                                        &subject,
-                                        &body,
-                                    )
-                                    .await;
-                                });
-                            }
-                            Ok(_) => {}
-                            Err(e) => warn!("failed to load alert config: {e}"),
-                        }
-                    }
+                    dispatch_alerts(alert, &outcome, &job_display_name, &command).await;
                 }
             }
             .instrument(info_span!("job_run", job = %span_name)),
         );
     }
+}
+
+/// Outcome of a job execution, extracted from the runner result.
+struct JobOutcome {
+    finished_at: chrono::DateTime<Utc>,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    status: RunStatus,
+}
+
+fn mark_running(running_jobs: &Arc<Mutex<HashSet<String>>>, job_id: &str) {
+    let mut running = running_jobs.lock().unwrap_or_else(|e| {
+        warn!("running_jobs mutex was poisoned, recovering");
+        e.into_inner()
+    });
+    running.insert(job_id.to_string());
+}
+
+async fn record_run_start(
+    store: &Arc<Mutex<Store>>,
+    run_id: String,
+    job_id: String,
+    job_display_name: String,
+    started_at: chrono::DateTime<Utc>,
+) {
+    let s = Arc::clone(store);
+    let run = RunRecord {
+        id: run_id,
+        job_id,
+        job_name: job_display_name,
+        started_at,
+        finished_at: None,
+        exit_code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        status: RunStatus::Running,
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        let store = s.lock().unwrap_or_else(|e| {
+            warn!("store mutex was poisoned, recovering");
+            e.into_inner()
+        });
+        store.insert_run(&run)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => error!("failed to record run start: {e}"),
+        Err(e) => error!("spawn_blocking panicked recording run start: {e}"),
+    }
+}
+
+fn resolve_outcome(
+    result: Result<crate::runner::JobOutput, CoreError>,
+    job_display_name: &str,
+) -> JobOutcome {
+    match result {
+        Ok(output) => {
+            let status = if output.success {
+                RunStatus::Success
+            } else {
+                RunStatus::Failed
+            };
+            info!(
+                exit_code = ?output.exit_code,
+                success = output.success,
+                "job completed"
+            );
+            JobOutcome {
+                finished_at: output.finished_at,
+                exit_code: output.exit_code,
+                stdout: output.stdout,
+                stderr: output.stderr,
+                status,
+            }
+        }
+        Err(CoreError::Timeout(dur)) => {
+            warn!(job = %job_display_name, timeout = ?dur, "job timed out");
+            JobOutcome {
+                finished_at: Utc::now(),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: format!("timed out after {dur:?}"),
+                status: RunStatus::Failed,
+            }
+        }
+        Err(e) => {
+            error!("job execution failed: {e}");
+            JobOutcome {
+                finished_at: Utc::now(),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: e.to_string(),
+                status: RunStatus::Failed,
+            }
+        }
+    }
+}
+
+async fn record_run_result(
+    store: &Arc<Mutex<Store>>,
+    run_id: String,
+    job_id: &str,
+    job_display_name: &str,
+    started_at: chrono::DateTime<Utc>,
+    outcome: &JobOutcome,
+) {
+    let s = Arc::clone(store);
+    let run = RunRecord {
+        id: run_id,
+        job_id: job_id.to_string(),
+        job_name: job_display_name.to_string(),
+        started_at,
+        finished_at: Some(outcome.finished_at),
+        exit_code: outcome.exit_code,
+        stdout: outcome.stdout.clone(),
+        stderr: outcome.stderr.clone(),
+        status: outcome.status,
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        let store = s.lock().unwrap_or_else(|e| {
+            warn!("store mutex was poisoned, recovering");
+            e.into_inner()
+        });
+        store.update_run(&run)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => error!("failed to record run result: {e}"),
+        Err(e) => error!("spawn_blocking panicked recording run result: {e}"),
+    }
+}
+
+async fn handle_once_removal(job_id: &str, job_display_name: &str) {
+    info!(job = %job_display_name, "one-time job completed, removing job file");
+    let jid = job_id.to_string();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Err(e) = config::delete_job_file(&jid) {
+            warn!(job = %jid, "failed to remove one-time job file: {e}");
+        }
+    })
+    .await;
+    let _ = signal_daemon_reload();
+}
+
+const ALERT_STDERR_MAX: usize = 500;
+
+async fn dispatch_alerts(
+    alert: &config::JobAlert,
+    outcome: &JobOutcome,
+    job_display_name: &str,
+    command: &str,
+) {
+    let should_alert = match outcome.status {
+        RunStatus::Failed => alert.on_failure,
+        RunStatus::Success => alert.on_success,
+        _ => false,
+    };
+    if !should_alert {
+        return;
+    }
+
+    let alert_config = match tokio::task::spawn_blocking(config::load_alerts).await {
+        Ok(Ok(cfg)) if !cfg.provider.is_empty() => cfg,
+        Ok(Err(e)) => {
+            warn!("failed to load alert config: {e}");
+            return;
+        }
+        _ => return,
+    };
+
+    let display_name = job_display_name.to_string();
+    let cmd = command.to_string();
+    let end = outcome.stderr.floor_char_boundary(ALERT_STDERR_MAX);
+    let stderr_snippet = &outcome.stderr[..end];
+    let subject = match outcome.status {
+        RunStatus::Failed => format!("kron job failed: {display_name}"),
+        _ => format!("kron job succeeded: {display_name}"),
+    };
+    let body = format!(
+        "Command: {cmd}\nExit code: {}\nStderr: {stderr_snippet}",
+        outcome
+            .exit_code
+            .map_or_else(|| "unknown".to_string(), |c| c.to_string())
+    );
+    tokio::spawn(async move {
+        crate::notify::notify_all(&alert_config.provider, &subject, &body).await;
+    });
 }
 
 /// Compute how long to sleep until the next job is due.

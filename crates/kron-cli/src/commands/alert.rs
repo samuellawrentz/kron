@@ -45,6 +45,9 @@ pub fn list() -> Result<()> {
             AlertProvider::Webhook { url } => {
                 println!("  {}. Webhook ({url})", i + 1);
             }
+            _ => {
+                println!("  {}. Unknown provider", i + 1);
+            }
         }
     }
     Ok(())
@@ -75,6 +78,7 @@ pub async fn test_alerts() -> Result<()> {
                     AlertProvider::Telegram { .. } => "Telegram",
                     AlertProvider::Slack { .. } => "Slack",
                     AlertProvider::Webhook { .. } => "Webhook",
+                    _ => "Unknown",
                 };
                 println!("  {name}: sent successfully");
             }
@@ -97,6 +101,7 @@ pub fn remove(index: usize) -> Result<()> {
         AlertProvider::Telegram { .. } => "Telegram",
         AlertProvider::Slack { .. } => "Slack",
         AlertProvider::Webhook { .. } => "Webhook",
+        _ => "Unknown",
     };
     println!("Removed {name} alert provider");
     Ok(())

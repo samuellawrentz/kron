@@ -17,6 +17,7 @@ pub struct AlertConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[non_exhaustive]
 pub enum AlertProvider {
     #[serde(rename = "telegram")]
     Telegram { token: String, chat_id: String },

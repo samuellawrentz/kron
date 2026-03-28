@@ -59,15 +59,17 @@ pub async fn execute(query: &str) -> Result<()> {
     } else {
         RunStatus::Failed
     };
+    let success = output.success;
+    let exit_code = output.exit_code;
     let completed_run = RunRecord {
         id: run_id,
         job_id: job.id.clone(),
         job_name: job.name.clone().unwrap_or_else(|| job.id.clone()),
         started_at,
         finished_at: Some(output.finished_at),
-        exit_code: output.exit_code,
-        stdout: output.stdout.clone(),
-        stderr: output.stderr.clone(),
+        exit_code,
+        stdout: output.stdout,
+        stderr: output.stderr,
         status,
     };
     store
@@ -75,25 +77,23 @@ pub async fn execute(query: &str) -> Result<()> {
         .context("failed to record run result")?;
 
     // Print result
-    if output.success {
+    if success {
         println!(
             "Completed successfully (exit code {})",
-            output.exit_code.unwrap_or(0)
+            exit_code.unwrap_or(0)
         );
     } else {
         println!(
             "Failed (exit code {})",
-            output
-                .exit_code
-                .map_or("unknown".to_string(), |c| c.to_string())
+            exit_code.map_or("unknown".to_string(), |c| c.to_string())
         );
     }
 
-    if !output.stdout.is_empty() {
-        print!("{}", output.stdout);
+    if !completed_run.stdout.is_empty() {
+        print!("{}", completed_run.stdout);
     }
-    if !output.stderr.is_empty() {
-        eprint!("{}", output.stderr);
+    if !completed_run.stderr.is_empty() {
+        eprint!("{}", completed_run.stderr);
     }
 
     Ok(())
