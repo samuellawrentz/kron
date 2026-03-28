@@ -107,7 +107,17 @@ pub fn execute(
         }
         Some(env_map)
     } else {
-        None
+        // Always capture PATH so jobs find the same binaries the user had at
+        // creation time — regardless of how the daemon's shell is configured.
+        let mut env_map = std::collections::HashMap::new();
+        if let Ok(path) = std::env::var("PATH") {
+            env_map.insert("PATH".to_string(), path);
+        }
+        if env_map.is_empty() {
+            None
+        } else {
+            Some(env_map)
+        }
     };
 
     // Save TOML config file — TOML is the single source of truth for job definitions.
