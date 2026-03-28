@@ -792,6 +792,7 @@
       .hero { padding: 6rem 1.5rem 3rem; }
       section { padding: 4rem 1.5rem; }
       .comparison { grid-template-columns: 1fr; }
+      #agents .section-inner > .reveal[style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
       .terminal-body { font-size: 0.75rem; padding: 1rem; }
       .install-cmd { font-size: 0.85rem; flex-wrap: wrap; justify-content: center; }
     }
@@ -812,6 +813,7 @@
     <ul class="nav-links">
       <li><a href="#problems">Why</a></li>
       <li><a href="#features">Features</a></li>
+      <li><a href="#agents">Agents</a></li>
       <li><a href="#rust">Rust</a></li>
       <li><a href="#commands">Commands</a></li>
       <li><a href="#install">Install</a></li>
@@ -987,6 +989,65 @@
           <p>Written in Rust. 7.4MB binary. ~7ms startup. Low memory footprint. Runs on the cheapest VPS you have.</p>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- Agent-Friendly -->
+  <section id="agents" style="background: var(--bg-surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+    <div class="section-inner">
+      <div class="section-label reveal">AI-native</div>
+      <h2 class="section-title reveal">Built for <span style="color: var(--orange);">agents</span></h2>
+      <p class="section-desc reveal">AI agents need tools they can call, parse, and reason about. kron was designed CLI-first — which means it's agent-first too.</p>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; align-items: start;" class="reveal">
+        <!-- Left: agent benefits -->
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+          <div class="feature-card" style="margin: 0;">
+            <span class="feature-icon">&#x1F916;</span>
+            <h3>Natural language in, structured data out</h3>
+            <p>Agents write <code>kron add "every day at 2am" ./backup.sh</code> — no cron syntax to hallucinate. Status and history return clean, parseable output.</p>
+          </div>
+          <div class="feature-card" style="margin: 0;">
+            <span class="feature-icon">&#x1F4C4;</span>
+            <h3>TOML configs agents can read &amp; write</h3>
+            <p>Each job is a single TOML file. Agents can create, modify, and version-control job definitions without fragile regex on a monolithic crontab.</p>
+          </div>
+          <div class="feature-card" style="margin: 0;">
+            <span class="feature-icon">&#x1F50C;</span>
+            <h3>Composable primitives</h3>
+            <p><code>add</code>, <code>run</code>, <code>test</code>, <code>status</code>, <code>logs</code>, <code>remove</code> — small, predictable commands that agents can chain into workflows. Exit codes tell the full story.</p>
+          </div>
+        </div>
+
+        <!-- Right: agent terminal demo -->
+        <div class="terminal" style="margin: 0;">
+          <div class="terminal-bar">
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+            <span class="terminal-title">claude &mdash; agent workflow</span>
+          </div>
+          <div class="terminal-body" style="min-height: auto; font-size: 0.78rem; line-height: 1.7;">
+            <div class="term-line term-dim"># Agent: "Set up nightly DB backup with alerts"</div>
+            <div class="term-blank"></div>
+            <div class="term-line"><span class="term-prompt">kron add</span> <span class="term-cmd">"every day at 1am" ./db-backup.sh</span></div>
+            <div class="term-line term-output term-success">&#10003; Job 'db-backup-sh' created</div>
+            <div class="term-blank"></div>
+            <div class="term-line"><span class="term-prompt">kron test</span> <span class="term-cmd">db-backup-sh</span></div>
+            <div class="term-line term-output term-success">&#10003; exit 0 (2.1s)</div>
+            <div class="term-blank"></div>
+            <div class="term-line"><span class="term-prompt">kron alert</span> <span class="term-cmd">add-telegram db-backup-sh</span></div>
+            <div class="term-line term-output term-success">&#10003; Telegram alerts enabled</div>
+            <div class="term-blank"></div>
+            <div class="term-line term-dim"># Agent: "Check if last night's backup ran"</div>
+            <div class="term-blank"></div>
+            <div class="term-line"><span class="term-prompt">kron status</span></div>
+            <div class="term-line term-output">db-backup-sh  every day at 1am  6h ago  <span class="term-success">&#10003; 2.3s</span></div>
+          </div>
+        </div>
+      </div>
+
+      <p class="reveal" style="margin-top: 2.5rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-muted); text-align: center;">No SDKs. No API keys. Just <span style="color: var(--orange);">shell access</span> — the universal agent interface.</p>
     </div>
   </section>
 
