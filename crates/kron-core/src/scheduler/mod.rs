@@ -32,6 +32,7 @@ pub struct Scheduler {
     cancel: CancellationToken,
     running_jobs: Arc<Mutex<HashSet<String>>>,
     reload_signal: Arc<Notify>,
+    silence_alerted: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Scheduler {
@@ -41,6 +42,7 @@ impl Scheduler {
             cancel,
             running_jobs: Arc::new(Mutex::new(HashSet::new())),
             reload_signal: Arc::new(Notify::new()),
+            silence_alerted: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -111,9 +113,10 @@ impl Scheduler {
                         cached_jobs = jobs;
                     }
 
-                    // Prune old runs every 60 seconds
+                    // Prune old runs and check silence every 60 seconds
                     if last_prune.elapsed() >= Duration::from_secs(60) {
                         self.prune_old_runs().await;
+                        self.check_silence(&cached_jobs).await;
                         last_prune = Instant::now();
                     }
                 }
@@ -170,6 +173,93 @@ impl Scheduler {
         }
     }
 
+    /// Check all jobs with `on_silence` set and fire an alert if they've been silent too long.
+    async fn check_silence(&self, jobs: &[CachedJob]) {
+        for cached in jobs {
+            let def = &cached.def;
+            let Some(ref alert) = def.alert else { continue };
+            let Some(ref silence_str) = alert.on_silence else {
+                continue;
+            };
+            let Some(silence_dur) = parse_duration(silence_str) else {
+                continue;
+            };
+
+            // Check if already alerted for this job
+            {
+                let alerted = self
+                    .silence_alerted
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if alerted.contains(&def.id) {
+                    continue;
+                }
+            }
+
+            let s = Arc::clone(&self.store);
+            let job_id = def.id.clone();
+            let last_run = tokio::task::spawn_blocking(move || {
+                let store = s.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                store.get_last_run(&job_id)
+            })
+            .await;
+
+            let elapsed = match last_run {
+                Ok(Ok(Some(run))) => Utc::now().signed_duration_since(run.started_at),
+                Ok(Ok(None)) => {
+                    // Never run — treat as infinitely silent
+                    chrono::Duration::MAX
+                }
+                Ok(Err(e)) => {
+                    warn!(job = %def.id, "failed to query last run for silence check: {e}");
+                    continue;
+                }
+                Err(e) => {
+                    error!("spawn_blocking panicked in silence check: {e}");
+                    continue;
+                }
+            };
+
+            let silence_chrono =
+                chrono::Duration::from_std(silence_dur).unwrap_or(chrono::Duration::MAX);
+            if elapsed <= silence_chrono {
+                continue;
+            }
+
+            // Mark as alerted before firing to avoid races
+            {
+                let mut alerted = self
+                    .silence_alerted
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                alerted.insert(def.id.clone());
+            }
+
+            let alert_config = match tokio::task::spawn_blocking(config::load_alerts).await {
+                Ok(Ok(cfg)) if !cfg.provider.is_empty() => cfg,
+                Ok(Err(e)) => {
+                    warn!("failed to load alert config for silence check: {e}");
+                    continue;
+                }
+                _ => continue,
+            };
+
+            let job_name = def.name.clone().unwrap_or_else(|| def.id.clone());
+            let subject = format!("kron job silent: {job_name}");
+            let hours = elapsed.num_hours();
+            let body = if elapsed == chrono::Duration::MAX {
+                format!("Job '{job_name}' has never run and on_silence is set.")
+            } else {
+                format!("Job '{job_name}' has not run in {hours}h (threshold: {silence_str}).")
+            };
+
+            info!(job = %job_name, elapsed_hours = hours, "firing silence alert");
+            tokio::spawn(async move {
+                crate::notify::notify_all(&alert_config.provider, &subject, &body).await;
+            });
+        }
+    }
+
     /// Prune old runs based on retention policy.
     async fn prune_old_runs(&self) {
         let s = Arc::clone(&self.store);
@@ -191,6 +281,7 @@ impl Scheduler {
     fn spawn_job(&self, def: &JobDefinition) {
         let store = Arc::clone(&self.store);
         let running_jobs = Arc::clone(&self.running_jobs);
+        let silence_alerted = Arc::clone(&self.silence_alerted);
         let job_id = def.id.clone();
         let job_display_name = def.name.clone().unwrap_or_else(|| def.id.clone());
         let command = def.command.clone();
@@ -242,6 +333,14 @@ impl Scheduler {
                     &outcome,
                 )
                 .await;
+
+                // Reset silence alert tracking when job runs successfully
+                if outcome.status == RunStatus::Success {
+                    let mut alerted = silence_alerted
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    alerted.remove(&job_id);
+                }
 
                 if once {
                     handle_once_removal(&job_id, &job_display_name).await;
@@ -671,6 +770,88 @@ mod tests {
         let sleep = compute_next_sleep(&jobs, &now);
         // Disabled job ignored, falls back to max sleep
         assert_eq!(sleep.as_secs(), MAX_SLEEP_SECS);
+    }
+
+    #[test]
+    fn test_silence_alerted_starts_empty() {
+        let store = Store::open_in_memory().unwrap();
+        let cancel = CancellationToken::new();
+        let scheduler = Scheduler::new(store, cancel);
+        let alerted = scheduler.silence_alerted.lock().unwrap();
+        assert!(alerted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_alerts_skips_when_on_failure_false() {
+        // on_failure=false with Failed outcome: returns immediately, no network access.
+        let alert = crate::config::JobAlert {
+            on_failure: false,
+            on_success: false,
+            on_silence: None,
+        };
+        let outcome = JobOutcome {
+            finished_at: Utc::now(),
+            exit_code: Some(1),
+            stdout: String::new(),
+            stderr: String::new(),
+            status: RunStatus::Failed,
+        };
+        dispatch_alerts(&alert, &outcome, "test-job", "echo hi").await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_alerts_skips_when_on_success_false() {
+        // on_success=false with Success outcome: returns immediately, no network access.
+        let alert = crate::config::JobAlert {
+            on_failure: false,
+            on_success: false,
+            on_silence: None,
+        };
+        let outcome = JobOutcome {
+            finished_at: Utc::now(),
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            status: RunStatus::Success,
+        };
+        dispatch_alerts(&alert, &outcome, "test-job", "echo hi").await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_alerts_on_failure_true_no_providers_returns_cleanly() {
+        // on_failure=true with Failed outcome: attempts to load alert config.
+        // In test env, config load fails or returns no providers — returns without panic.
+        let alert = crate::config::JobAlert {
+            on_failure: true,
+            on_success: false,
+            on_silence: None,
+        };
+        let outcome = JobOutcome {
+            finished_at: Utc::now(),
+            exit_code: Some(1),
+            stdout: String::new(),
+            stderr: String::new(),
+            status: RunStatus::Failed,
+        };
+        dispatch_alerts(&alert, &outcome, "test-job", "echo hi").await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_alerts_on_success_true_no_providers_returns_cleanly() {
+        // on_success=true with Success outcome: attempts alert, returns cleanly without providers.
+        let alert = crate::config::JobAlert {
+            on_failure: false,
+            on_success: true,
+            on_silence: None,
+        };
+        let outcome = JobOutcome {
+            finished_at: Utc::now(),
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            status: RunStatus::Success,
+        };
+        dispatch_alerts(&alert, &outcome, "test-job", "echo hi").await;
     }
 
     #[test]
