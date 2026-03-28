@@ -162,8 +162,85 @@ pub fn execute(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------
+    // resolve_schedule tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn raw_cron_passes_through_unchanged() {
+        let (expr, original) = resolve_schedule("0 2 * * *").unwrap();
+        assert_eq!(expr, "0 2 * * *");
+        assert!(original.is_none());
+    }
+
+    #[test]
+    fn every_minute_cron_passes_through() {
+        let (expr, original) = resolve_schedule("* * * * *").unwrap();
+        assert_eq!(expr, "* * * * *");
+        assert!(original.is_none());
+    }
+
+    #[test]
+    fn named_cron_at_midnight_passes_through() {
+        let (expr, original) = resolve_schedule("0 0 * * *").unwrap();
+        assert_eq!(expr, "0 0 * * *");
+        assert!(original.is_none());
+    }
+
+    #[test]
+    fn english_every_day_at_2am_converts() {
+        let (expr, original) = resolve_schedule("every day at 2am").unwrap();
+        // Result must be a valid 5-field cron expression
+        assert_eq!(expr.split_whitespace().count(), 5, "expected 5 cron fields");
+        // The hour field should be 2
+        let fields: Vec<&str> = expr.split_whitespace().collect();
+        assert_eq!(fields[1], "2", "hour field should be 2");
+        // original English input is preserved
+        assert_eq!(original.as_deref(), Some("every day at 2am"));
+    }
+
+    #[test]
+    fn english_every_hour_converts() {
+        let (expr, original) = resolve_schedule("every hour").unwrap();
+        assert_eq!(expr.split_whitespace().count(), 5);
+        assert!(original.is_some());
+    }
+
+    #[test]
+    fn english_every_minute_converts() {
+        let (expr, original) = resolve_schedule("every minute").unwrap();
+        assert_eq!(expr.split_whitespace().count(), 5);
+        assert!(original.is_some());
+    }
+
+    #[test]
+    fn invalid_schedule_returns_error() {
+        let result = resolve_schedule("this is not valid");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("invalid schedule"));
+    }
+
+    #[test]
+    fn empty_schedule_returns_error() {
+        assert!(resolve_schedule("").is_err());
+    }
+
+    #[test]
+    fn five_field_with_day_of_week_passes_through() {
+        // day-of-week range — valid 5-field cron
+        let (expr, original) = resolve_schedule("0 9 * * 1-5").unwrap();
+        assert_eq!(expr, "0 9 * * 1-5");
+        assert!(original.is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // shell_quote / shell_quote_join tests
+    // ------------------------------------------------------------------
 
     #[test]
     fn simple_args_unquoted() {

@@ -1,3 +1,5 @@
+//! CLI entry point for kron — a modern cron replacement with built-in observability.
+
 use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;

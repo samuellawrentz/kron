@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::str::FromStr;
 
 use rusqlite::{Connection, Row, params};
 use rusqlite_migration::{M, Migrations};
@@ -98,7 +99,10 @@ fn run_from_row(row: &Row) -> rusqlite::Result<RunRecord> {
         exit_code: row.get(5)?,
         stdout: row.get(6)?,
         stderr: row.get(7)?,
-        status: RunStatus::parse(&status_str),
+        status: RunStatus::from_str(&status_str).unwrap_or_else(|_| {
+            tracing::warn!(value = %status_str, "unrecognized RunStatus value, defaulting to Failed");
+            RunStatus::Failed
+        }),
     })
 }
 
@@ -127,11 +131,19 @@ fn run_summary_from_row(row: &Row) -> rusqlite::Result<RunSummary> {
         started_at,
         finished_at,
         exit_code: row.get(5)?,
-        status: RunStatus::parse(&status_str),
+        status: RunStatus::from_str(&status_str).unwrap_or_else(|_| {
+            tracing::warn!(value = %status_str, "unrecognized RunStatus value, defaulting to Failed");
+            RunStatus::Failed
+        }),
     })
 }
 
 impl Store {
+    /// Open or create a persistent store at the given file path, running any pending migrations.
+    ///
+    /// # Errors
+    /// Returns `StoreError` if the directory cannot be created, the database cannot be opened,
+    /// permissions cannot be set, or migrations fail.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -174,6 +186,10 @@ impl Store {
         Ok(store)
     }
 
+    /// Open a transient in-memory store, primarily for testing.
+    ///
+    /// # Errors
+    /// Returns `StoreError` if the in-memory database cannot be opened or migrations fail.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(
@@ -190,6 +206,11 @@ impl Store {
         Ok(())
     }
 
+    /// Insert a new job record into the database.
+    ///
+    /// # Errors
+    /// Returns `StoreError::JobAlreadyExists` if a job with the same name already exists,
+    /// or `StoreError::Database` on other `SQLite` errors.
     pub fn insert_job(&self, job: &JobRecord) -> Result<(), StoreError> {
         let result = self.conn.execute(
             "INSERT INTO jobs (id, name, command, schedule, working_dir, created_at, enabled)
@@ -218,6 +239,10 @@ impl Store {
         }
     }
 
+    /// Return all jobs ordered by name.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn list_jobs(&self) -> Result<Vec<JobRecord>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, command, schedule, working_dir, created_at, enabled
@@ -235,6 +260,10 @@ impl Store {
     }
 
     /// Look up a job by its exact ID.
+    ///
+    /// # Errors
+    /// Returns `StoreError::JobNotFound` if no job with that ID exists,
+    /// or `StoreError::Database` on `SQLite` errors.
     pub fn get_job_by_id(&self, id: &str) -> Result<JobRecord, StoreError> {
         let result = self.conn.query_row(
             "SELECT id, name, command, schedule, working_dir, created_at, enabled
@@ -253,6 +282,10 @@ impl Store {
     }
 
     /// Look up a job by ID first, then by name.
+    ///
+    /// # Errors
+    /// Returns `StoreError::JobNotFound` if no job matches the query,
+    /// or `StoreError::Database` on `SQLite` errors.
     pub fn get_job(&self, query: &str) -> Result<JobRecord, StoreError> {
         // Try by id first
         let by_id = self.conn.query_row(
@@ -284,6 +317,10 @@ impl Store {
     }
 
     /// Delete a job by its ID.
+    ///
+    /// # Errors
+    /// Returns `StoreError::JobNotFound` if no job with that ID exists,
+    /// or `StoreError::Database` on `SQLite` errors.
     pub fn delete_job(&self, id: &str) -> Result<(), StoreError> {
         let count = self
             .conn
@@ -296,6 +333,10 @@ impl Store {
         Ok(())
     }
 
+    /// Insert a new run record into the database.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn insert_run(&self, run: &RunRecord) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO runs (id, job_id, job_name, started_at, finished_at, exit_code, stdout, stderr, status)
@@ -315,6 +356,11 @@ impl Store {
         Ok(())
     }
 
+    /// Update an existing run record (completion time, exit code, output, status).
+    ///
+    /// # Errors
+    /// Returns `StoreError::RunNotFound` if no run with the given ID exists,
+    /// or `StoreError::Database` on `SQLite` errors.
     pub fn update_run(&self, run: &RunRecord) -> Result<(), StoreError> {
         let rows_affected = self.conn.execute(
             "UPDATE runs
@@ -337,6 +383,9 @@ impl Store {
 
     /// List runs for a job. Queries by `job_id` OR `job_name` for backward compatibility
     /// with old runs that were stored with name-as-job_id.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn list_runs(&self, job_id: &str, limit: usize) -> Result<Vec<RunRecord>, StoreError> {
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut stmt = self.conn.prepare(
@@ -357,6 +406,9 @@ impl Store {
     }
 
     /// Count total and successful runs for all jobs in a single query.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn count_all_runs(
         &self,
     ) -> Result<std::collections::HashMap<String, (u64, u64)>, StoreError> {
@@ -381,6 +433,9 @@ impl Store {
     }
 
     /// Get the most recent run across all jobs.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn get_latest_run(&self) -> Result<Option<RunRecord>, StoreError> {
         let result = self.conn.query_row(
             "SELECT id, job_id, job_name, started_at, finished_at, exit_code, stdout, stderr, status
@@ -399,6 +454,9 @@ impl Store {
     }
 
     /// List runs for a job without loading stdout/stderr — suitable for history/status displays.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn list_runs_summary(
         &self,
         job_id: &str,
@@ -424,6 +482,9 @@ impl Store {
 
     /// Return the most recent run summary for every job in a single query.
     /// The returned map is keyed by `job_id`.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn get_last_run_all_jobs(
         &self,
     ) -> Result<std::collections::HashMap<String, RunSummary>, StoreError> {
@@ -448,6 +509,9 @@ impl Store {
     }
 
     /// List recent run summaries across all jobs, ordered by most recent first.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn list_all_runs_summary(&self, limit: usize) -> Result<Vec<RunSummary>, StoreError> {
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut stmt = self.conn.prepare(
@@ -468,6 +532,9 @@ impl Store {
 
     /// Get the Nth most recent run across all jobs (1-indexed).
     /// Returns full `RunRecord` including stdout/stderr.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn get_nth_latest_run(&self, n: usize) -> Result<Option<RunRecord>, StoreError> {
         let offset = i64::try_from(n.saturating_sub(1)).unwrap_or(0);
         let result = self.conn.query_row(
@@ -488,6 +555,9 @@ impl Store {
 
     /// Delete old runs based on retention policy.
     /// Returns the number of rows deleted.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn prune_runs(
         &self,
         max_runs_per_job: usize,
@@ -523,6 +593,9 @@ impl Store {
     }
 
     /// Get the most recent run for a job. Queries by `job_id` OR `job_name` for backward compat.
+    ///
+    /// # Errors
+    /// Returns `StoreError::Database` on `SQLite` errors.
     pub fn get_last_run(&self, job_id: &str) -> Result<Option<RunRecord>, StoreError> {
         let result = self.conn.query_row(
             "SELECT id, job_id, job_name, started_at, finished_at, exit_code, stdout, stderr, status

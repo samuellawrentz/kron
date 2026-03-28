@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct JobRecord {
     pub id: String,
     pub name: Option<String>,
@@ -14,7 +14,7 @@ pub struct JobRecord {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RunRecord {
     pub id: String,
     pub job_id: String,
@@ -31,17 +31,13 @@ impl RunRecord {
     /// Display name for this run's job: prefers `job_name`, falls back to `job_id`.
     #[must_use]
     pub fn display_name(&self) -> &str {
-        if self.job_name.is_empty() {
-            &self.job_id
-        } else {
-            &self.job_name
-        }
+        display_name_from(&self.job_name, &self.job_id)
     }
 }
 
 /// Metadata-only view of a run — no stdout/stderr.
 /// Use for list/history/status displays to avoid loading large output blobs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RunSummary {
     pub id: String,
     pub job_id: String,
@@ -56,11 +52,15 @@ impl RunSummary {
     /// Display name for this run's job: prefers `job_name`, falls back to `job_id`.
     #[must_use]
     pub fn display_name(&self) -> &str {
-        if self.job_name.is_empty() {
-            &self.job_id
-        } else {
-            &self.job_name
-        }
+        display_name_from(&self.job_name, &self.job_id)
+    }
+}
+
+fn display_name_from<'a>(job_name: &'a str, job_id: &'a str) -> &'a str {
+    if job_name.is_empty() {
+        job_id
+    } else {
+        job_name
     }
 }
 
@@ -81,22 +81,6 @@ impl RunStatus {
             Self::Failed => "failed",
         }
     }
-
-    #[must_use]
-    pub fn parse(s: &str) -> Self {
-        match s {
-            "running" => Self::Running,
-            "success" => Self::Success,
-            "failed" => Self::Failed,
-            _ => {
-                tracing::warn!(
-                    status = s,
-                    "unrecognized RunStatus value, defaulting to Failed"
-                );
-                Self::Failed
-            }
-        }
-    }
 }
 
 impl fmt::Display for RunStatus {
@@ -105,26 +89,15 @@ impl fmt::Display for RunStatus {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct ParseRunStatusError(String);
-
-impl fmt::Display for ParseRunStatusError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown run status: {:?}", self.0)
-    }
-}
-
-impl std::error::Error for ParseRunStatusError {}
-
 impl FromStr for RunStatus {
-    type Err = ParseRunStatusError;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "running" => Ok(Self::Running),
             "success" => Ok(Self::Success),
             "failed" => Ok(Self::Failed),
-            _ => Err(ParseRunStatusError(s.to_string())),
+            _ => Err(format!("unknown run status: {s:?}")),
         }
     }
 }

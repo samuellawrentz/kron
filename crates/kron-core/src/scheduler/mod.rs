@@ -1,3 +1,5 @@
+//! Next-fire scheduler that computes sleep intervals and dispatches due jobs.
+
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

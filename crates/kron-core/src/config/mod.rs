@@ -1,9 +1,59 @@
+//! Job configuration management: TOML parsing, validation, and file I/O.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
+
+/// Serde helpers for duration strings like "30", "30s", "5m", "1h".
+/// Validates the format at deserialization time so bad values fail fast.
+mod duration_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn is_valid(s: &str) -> bool {
+        if s.is_empty() {
+            return false;
+        }
+        for suffix in ['h', 'm', 's'] {
+            if let Some(rest) = s.strip_suffix(suffix) {
+                return rest.parse::<u64>().is_ok();
+            }
+        }
+        s.parse::<u64>().is_ok()
+    }
+
+    pub fn deserialize_opt<'de, D>(de: D) -> Result<Option<String>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt = Option::<String>::deserialize(de)?;
+        match opt {
+            None => Ok(None),
+            Some(s) => {
+                if is_valid(&s) {
+                    Ok(Some(s))
+                } else {
+                    Err(serde::de::Error::custom(format!(
+                        "invalid duration \"{s}\": expected bare seconds (\"30\"), or a number with suffix s/m/h (\"30s\", \"5m\", \"1h\")"
+                    )))
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
+    pub fn serialize_opt<S>(val: &Option<String>, ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match val {
+            Some(s) => ser.serialize_some(s),
+            None => ser.serialize_none(),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Alert configuration types
@@ -34,7 +84,11 @@ pub struct JobAlert {
     #[serde(default)]
     pub on_success: bool,
     /// Dead-man switch: alert if the job hasn't run in this duration (e.g. "1h").
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "duration_serde::deserialize_opt",
+        serialize_with = "duration_serde::serialize_opt"
+    )]
     pub on_silence: Option<String>,
 }
 
@@ -206,7 +260,11 @@ pub struct JobDefinition {
     pub working_dir: Option<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "duration_serde::deserialize_opt",
+        serialize_with = "duration_serde::serialize_opt"
+    )]
     pub timeout: Option<String>,
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
@@ -249,7 +307,7 @@ pub fn script_path(job_id: &str) -> PathBuf {
 /// Load the `.sh` script content for a job, stripping the shebang line.
 /// Returns `None` if the file does not exist.
 #[must_use]
-pub fn load_script(job_id: &str) -> Option<String> {
+pub(crate) fn load_script(job_id: &str) -> Option<String> {
     let path = script_path(job_id);
     let content = std::fs::read_to_string(path).ok()?;
     let stripped = if let Some(rest) = content.strip_prefix("#!") {
@@ -272,7 +330,7 @@ pub fn load_script(job_id: &str) -> Option<String> {
 ///
 /// # Errors
 /// Returns `CoreError` if the file cannot be written.
-pub fn save_script(job_id: &str, command: &str) -> Result<PathBuf, CoreError> {
+pub(crate) fn save_script(job_id: &str, command: &str) -> Result<PathBuf, CoreError> {
     let path = script_path(job_id);
     let content = format!("#!/bin/bash\n{command}\n");
     std::fs::write(&path, &content)?;
@@ -282,7 +340,7 @@ pub fn save_script(job_id: &str, command: &str) -> Result<PathBuf, CoreError> {
 /// Remove the `.sh` script file for a job if it exists.
 /// Logs a warning for unexpected errors (e.g. permission denied); silently
 /// ignores `NotFound` since the file may never have been created.
-pub fn delete_script(job_id: &str) {
+pub(crate) fn delete_script(job_id: &str) {
     let path = script_path(job_id);
     match std::fs::remove_file(path) {
         Ok(()) => {}
@@ -820,5 +878,88 @@ schedule = "* * * * *"
 
         let file_meta = fs::metadata(&file_path).unwrap();
         assert_eq!(file_meta.permissions().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn test_duration_serde_valid_formats() {
+        for s in ["30", "30s", "5m", "1h", "0", "0s"] {
+            assert!(super::duration_serde::is_valid(s), "{s} should be valid");
+        }
+    }
+
+    #[test]
+    fn test_duration_serde_invalid_formats() {
+        for s in ["", "abc", "1x", "5 m", "1H", "1.5h", "-1s"] {
+            assert!(!super::duration_serde::is_valid(s), "{s} should be invalid");
+        }
+    }
+
+    #[test]
+    fn test_timeout_rejects_invalid_duration() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+timeout = "bad"
+"#;
+        let result: Result<JobConfig, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "invalid timeout should fail to parse");
+    }
+
+    #[test]
+    fn test_on_silence_rejects_invalid_duration() {
+        let toml_str = r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+
+[job.alert]
+on_silence = "2d"
+"#;
+        let result: Result<JobConfig, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "invalid on_silence should fail to parse");
+    }
+
+    #[test]
+    fn test_timeout_accepts_all_valid_formats() {
+        for timeout in ["30", "30s", "5m", "1h"] {
+            let toml_str = format!(
+                r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+timeout = "{timeout}"
+"#
+            );
+            let result: Result<JobConfig, _> = toml::from_str(&toml_str);
+            assert!(result.is_ok(), "timeout={timeout} should parse ok");
+            assert_eq!(result.unwrap().job.timeout.as_deref(), Some(timeout));
+        }
+    }
+
+    #[test]
+    fn test_on_silence_accepts_all_valid_formats() {
+        for dur in ["30", "30s", "5m", "1h"] {
+            let toml_str = format!(
+                r#"
+[job]
+id = "abc12345"
+command = "echo hi"
+schedule = "* * * * *"
+
+[job.alert]
+on_silence = "{dur}"
+"#
+            );
+            let result: Result<JobConfig, _> = toml::from_str(&toml_str);
+            assert!(result.is_ok(), "on_silence={dur} should parse ok");
+            assert_eq!(
+                result.unwrap().job.alert.unwrap().on_silence.as_deref(),
+                Some(dur)
+            );
+        }
     }
 }

@@ -1,3 +1,5 @@
+//! Alert dispatch to configured providers (Telegram, Slack, webhooks).
+
 use crate::config::AlertProvider;
 use crate::error::CoreError;
 

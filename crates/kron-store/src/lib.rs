@@ -1,4 +1,4 @@
-#![allow(clippy::missing_errors_doc)]
+//! `SQLite` persistence layer for kron job definitions and run history.
 
 mod error;
 mod models;

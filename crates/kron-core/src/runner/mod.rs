@@ -1,3 +1,5 @@
+//! Job execution engine: runs commands/scripts with timeout, env vars, and output capture.
+
 use std::fmt::Write as _;
 use std::path::Path;
 use std::time::Duration;

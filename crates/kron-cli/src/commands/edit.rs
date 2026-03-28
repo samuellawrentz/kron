@@ -145,3 +145,78 @@ pub fn execute(args: EditArgs<'_>) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use croner::Cron;
+    use kron_core::config::validate_job_name;
+    use kron_core::scheduler::parse_duration;
+
+    // ------------------------------------------------------------------
+    // Schedule validation (mirrors the logic in execute())
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn valid_cron_expressions_accepted() {
+        assert!(Cron::new("* * * * *").parse().is_ok());
+        assert!(Cron::new("0 2 * * *").parse().is_ok());
+        assert!(Cron::new("30 6 * * 1-5").parse().is_ok());
+        assert!(Cron::new("0 0 1 * *").parse().is_ok());
+    }
+
+    #[test]
+    fn invalid_cron_expressions_rejected() {
+        assert!(Cron::new("not a cron").parse().is_err());
+        assert!(Cron::new("99 99 99 99 99").parse().is_err());
+        assert!(Cron::new("").parse().is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // Name validation (mirrors the validate_job_name call in execute())
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn valid_names_accepted_by_edit_validation() {
+        assert!(validate_job_name("backup").is_ok());
+        assert!(validate_job_name("my-job").is_ok());
+        assert!(validate_job_name("job_123").is_ok());
+        assert!(validate_job_name(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn invalid_names_rejected_by_edit_validation() {
+        assert!(validate_job_name("").is_err());
+        assert!(validate_job_name("has space").is_err());
+        assert!(validate_job_name("has.dot").is_err());
+        assert!(validate_job_name(&"a".repeat(65)).is_err());
+        assert!(validate_job_name("../traversal").is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // Timeout validation (mirrors the parse_duration call in execute())
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn valid_timeout_strings_parsed() {
+        assert!(parse_duration("30s").is_some());
+        assert!(parse_duration("5m").is_some());
+        assert!(parse_duration("1h").is_some());
+        assert!(parse_duration("120").is_some()); // bare seconds
+    }
+
+    #[test]
+    fn invalid_timeout_strings_rejected() {
+        assert!(parse_duration("").is_none());
+        assert!(parse_duration("abc").is_none());
+        assert!(parse_duration("5x").is_none());
+    }
+
+    #[test]
+    fn timeout_removal_keywords_are_not_parsed_as_duration() {
+        // "none" and "off" are handled specially in execute() before
+        // parse_duration is called, so they must NOT produce a valid duration.
+        assert!(parse_duration("none").is_none());
+        assert!(parse_duration("off").is_none());
+    }
+}

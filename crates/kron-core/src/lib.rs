@@ -1,3 +1,5 @@
+//! Core logic for kron: config, scheduling, job execution, and notifications.
+
 #![allow(clippy::missing_errors_doc)]
 
 pub mod config;
