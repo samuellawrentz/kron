@@ -19,6 +19,9 @@ pub fn execute() -> Result<()> {
     );
     println!("{}", "-".repeat(75));
 
+    let active_ids: std::collections::HashSet<String> =
+        jobs.iter().map(|j| j.job.id.clone()).collect();
+
     for job_config in &jobs {
         let job = &job_config.job;
         let name_display = job.name.as_deref().unwrap_or("-");
@@ -51,6 +54,32 @@ pub fn execute() -> Result<()> {
                 );
             }
         }
+    }
+
+    // Show runs for removed jobs (e.g. --once jobs that auto-deleted)
+    for (job_id, run) in &last_runs {
+        if active_ids.contains(job_id) {
+            continue;
+        }
+        let name_display = run.display_name();
+        let duration = run.finished_at.map_or_else(
+            || "running".to_string(),
+            |f| format!("{}s", (f - run.started_at).num_seconds()),
+        );
+        let exit_code = run
+            .exit_code
+            .map_or_else(|| "-".to_string(), |c| c.to_string());
+
+        println!(
+            "{:<10} {:<20} {:<10} {:<12} {} ({duration})",
+            job_id,
+            name_display,
+            run.status.as_str(),
+            exit_code,
+            run.started_at
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S"),
+        );
     }
 
     Ok(())

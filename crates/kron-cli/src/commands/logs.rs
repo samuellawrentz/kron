@@ -6,14 +6,17 @@ pub fn execute(query: Option<&str>, run_number: usize) -> Result<()> {
     let store = Store::open(&config::db_path()).context("failed to open database")?;
 
     let run = if let Some(query) = query {
-        // Resolve job by ID or name
-        let job_config = config::find_job(query)
-            .context("failed to load jobs")?
-            .with_context(|| format!("job '{query}' not found"))?;
-        let job = &job_config.job;
+        // Resolve by config, or fall back to querying the store directly
+        // (handles --once jobs whose config was auto-removed).
+        let (job_id, display) = match config::find_job(query).ok().flatten() {
+            Some(cfg) => {
+                let d = cfg.job.name.clone().unwrap_or_else(|| cfg.job.id.clone());
+                (cfg.job.id, d)
+            }
+            None => (query.to_string(), query.to_string()),
+        };
 
-        let runs = store.list_runs(&job.id, run_number)?;
-        let display = job.name.as_deref().unwrap_or(&job.id);
+        let runs = store.list_runs(&job_id, run_number)?;
 
         if runs.is_empty() {
             bail!("no runs recorded for '{display}'");
