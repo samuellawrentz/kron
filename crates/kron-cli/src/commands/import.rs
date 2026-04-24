@@ -119,16 +119,11 @@ fn display_entries(entries: &[CrontabEntry]) {
     println!("  #  Schedule             Command");
     println!("  ── ──────────────────── ──────────────────────────────────");
     for (i, entry) in entries.iter().enumerate() {
-        let schedule = if entry.schedule.len() > 20 {
-            format!("{}…", &entry.schedule[..19])
-        } else {
-            format!("{:<20}", entry.schedule)
+        let schedule = {
+            let t = super::truncate_display(&entry.schedule, 20);
+            format!("{t:<20}")
         };
-        let cmd_display = if entry.command.len() > 50 {
-            format!("{}…", &entry.command[..49])
-        } else {
-            entry.command.clone()
-        };
+        let cmd_display = super::truncate_display(&entry.command, 50);
         let comment_suffix = entry
             .comment
             .as_ref()

@@ -7,6 +7,9 @@ pub enum CoreError {
     #[error("job not found: {name}")]
     JobNotFound { name: String },
 
+    #[error("ambiguous job query, matches: {0}")]
+    AmbiguousJob(String),
+
     #[error("invalid job name '{name}': {reason}")]
     InvalidJobName { name: String, reason: String },
 

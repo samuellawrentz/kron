@@ -174,6 +174,13 @@ pub enum DaemonCommand {
     Status,
 }
 
+pub(super) fn truncate_display(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        None => s.to_string(),
+        Some((idx, _)) => format!("{}…", &s[..s.floor_char_boundary(idx.saturating_sub(1))]),
+    }
+}
+
 pub async fn run(cmd: Command) -> Result<()> {
     match cmd {
         Command::Add {

@@ -601,23 +601,32 @@ pub fn parse_duration(s: &str) -> Option<Duration> {
     if let Some(rest) = s.strip_suffix('h')
         && let Ok(n) = rest.parse::<u64>()
     {
-        return Some(Duration::from_secs(n * 3600));
+        return non_zero_duration_secs(n.saturating_mul(3600), s);
     }
     if let Some(rest) = s.strip_suffix('m')
         && let Ok(n) = rest.parse::<u64>()
     {
-        return Some(Duration::from_secs(n * 60));
+        return non_zero_duration_secs(n.saturating_mul(60), s);
     }
     if let Some(rest) = s.strip_suffix('s')
         && let Ok(n) = rest.parse::<u64>()
     {
-        return Some(Duration::from_secs(n));
+        return non_zero_duration_secs(n, s);
     }
     if let Ok(n) = s.parse::<u64>() {
-        return Some(Duration::from_secs(n));
+        return non_zero_duration_secs(n, s);
     }
     warn!(value = %s, "invalid timeout value, ignoring (no timeout will be applied)");
     None
+}
+
+fn non_zero_duration_secs(secs: u64, original: &str) -> Option<Duration> {
+    if secs == 0 {
+        warn!(value = %original, "timeout value must be greater than zero, ignoring");
+        None
+    } else {
+        Some(Duration::from_secs(secs))
+    }
 }
 
 /// Reload all job configs from disk (async wrapper for `spawn_blocking`).
@@ -715,6 +724,14 @@ mod tests {
     fn test_parse_duration_invalid() {
         assert_eq!(parse_duration("invalid"), None);
         assert_eq!(parse_duration(""), None);
+    }
+
+    #[test]
+    fn test_parse_duration_zero_is_invalid() {
+        assert_eq!(parse_duration("0"), None);
+        assert_eq!(parse_duration("0s"), None);
+        assert_eq!(parse_duration("0m"), None);
+        assert_eq!(parse_duration("0h"), None);
     }
 
     #[test]

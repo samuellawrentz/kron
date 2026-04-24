@@ -2,11 +2,17 @@
 
 use std::fmt::Write as _;
 use std::path::Path;
+use std::process::Stdio;
 use std::time::Duration;
 
 use chrono::Utc;
 use tokio::process::Command;
 use tracing::{Instrument, info, info_span};
+
+#[cfg(unix)]
+use nix::sys::signal::{self, Signal};
+#[cfg(unix)]
+use nix::unistd::Pid;
 
 /// Determine the user's login shell for job execution.
 ///
@@ -14,7 +20,10 @@ use tracing::{Instrument, info, info_span};
 /// `.bash_profile`, etc.) are sourced when running with `-l`.
 /// Falls back to `"sh"` if `$SHELL` is unset.
 fn user_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "sh".into())
+    std::env::var("SHELL").unwrap_or_else(|_| {
+        info!("$SHELL not set, falling back to 'sh' -- shell startup files may not load");
+        "sh".into()
+    })
 }
 
 use crate::error::CoreError;
@@ -59,6 +68,16 @@ fn configure_command(
     }
 }
 
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    let Ok(raw_pid) = i32::try_from(pid) else {
+        return;
+    };
+    if raw_pid > 0 {
+        let _ = signal::kill(Pid::from_raw(-raw_pid), Signal::SIGKILL);
+    }
+}
+
 /// Drive a fully-configured `Command` to completion, respecting an optional timeout,
 /// and return a `JobOutput`.
 ///
@@ -78,16 +97,36 @@ async fn run_command(
 ) -> Result<JobOutput, CoreError> {
     let started_at = Utc::now();
     configure_command(&mut cmd, working_dir, env_vars);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     async move {
+        let child = cmd
+            .spawn()
+            .map_err(|e| CoreError::Execution(e.to_string()))?;
+        let child_pid = child.id();
+
         let output = if let Some(dur) = timeout {
-            match tokio::time::timeout(dur, cmd.output()).await {
+            let mut wait = Box::pin(child.wait_with_output());
+            match tokio::time::timeout(dur, wait.as_mut()).await {
                 Ok(Ok(out)) => out,
                 Ok(Err(e)) => return Err(CoreError::Execution(e.to_string())),
-                Err(_) => return Err(CoreError::Timeout(dur)),
+                Err(_) => {
+                    #[cfg(unix)]
+                    if let Some(pid) = child_pid {
+                        kill_process_group(pid);
+                    }
+
+                    let _ = wait.await;
+                    return Err(CoreError::Timeout(dur));
+                }
             }
         } else {
-            cmd.output()
+            child
+                .wait_with_output()
                 .await
                 .map_err(|e| CoreError::Execution(e.to_string()))?
         };

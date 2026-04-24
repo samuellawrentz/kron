@@ -1,4 +1,8 @@
 use anyhow::{Context, Result};
+use fs2::FileExt;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::Path;
 use std::process::Command as StdCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -277,6 +281,34 @@ fn is_daemon_running() -> Option<u32> {
     find_running_daemon()
 }
 
+fn acquire_pid_lock(pid_path: &Path) -> Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(pid_path)
+        .with_context(|| format!("failed to open pid file: {}", pid_path.display()))?;
+
+    file.try_lock_exclusive().with_context(|| {
+        format!(
+            "kron daemon is already running. Stop it first with 'kron daemon stop' (pid file: {}).",
+            pid_path.display()
+        )
+    })?;
+
+    Ok(file)
+}
+
+fn write_pid(lock_file: &mut File, pid: u32) -> Result<()> {
+    lock_file
+        .set_len(0)
+        .context("failed to truncate pid file")?;
+    writeln!(lock_file, "{pid}").context("failed to write pid file")?;
+    lock_file.sync_all().context("failed to sync pid file")?;
+    Ok(())
+}
+
 pub fn stop() -> Result<()> {
     let pid_path = kron_core::config::data_dir().join("daemon.pid");
     let pid_str =
@@ -316,13 +348,8 @@ pub async fn execute(foreground: bool) -> Result<()> {
         // Ensure data directory exists
         let data_dir = kron_core::config::data_dir();
         std::fs::create_dir_all(&data_dir).context("failed to create data directory")?;
-
-        // Refuse to start if daemon is already running
-        if let Some(pid) = is_daemon_running() {
-            anyhow::bail!(
-                "kron daemon is already running (pid {pid}). Stop it first with 'kron daemon stop'."
-            );
-        }
+        let pid_path = data_dir.join("daemon.pid");
+        let mut pid_lock = acquire_pid_lock(&pid_path)?;
 
         // Open a log file for daemon output
         let log_path = data_dir.join("daemon.log");
@@ -343,8 +370,7 @@ pub async fn execute(foreground: bool) -> Result<()> {
         let pid = child.id();
 
         // Save PID file for later use
-        let pid_path = data_dir.join("daemon.pid");
-        std::fs::write(&pid_path, pid.to_string()).context("failed to write PID file")?;
+        write_pid(&mut pid_lock, pid)?;
 
         println!("kron daemon started (pid {pid})");
         println!("  Logs: {}", log_path.display());
@@ -355,18 +381,14 @@ pub async fn execute(foreground: bool) -> Result<()> {
     }
 
     // Foreground mode — refuse to start if another daemon is already running.
-    if let Some(pid) = is_daemon_running() {
-        anyhow::bail!(
-            "kron daemon is already running (pid {pid}). Stop it first with 'kron daemon stop'."
-        );
-    }
-
     // Write PID file so other instances (and `kron daemon stop`) can find us.
     let data_dir = kron_core::config::data_dir();
     std::fs::create_dir_all(&data_dir).context("failed to create data directory")?;
     let pid_path = data_dir.join("daemon.pid");
+    let mut pid_lock = acquire_pid_lock(&pid_path)?;
+
     let our_pid = std::process::id();
-    std::fs::write(&pid_path, our_pid.to_string()).context("failed to write PID file")?;
+    write_pid(&mut pid_lock, our_pid)?;
 
     let store = Store::open(&config::db_path()).context("failed to open database")?;
     let cancel = CancellationToken::new();

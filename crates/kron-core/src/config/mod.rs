@@ -480,6 +480,13 @@ pub fn find_job(query: &str) -> Result<Option<JobConfig>, CoreError> {
         .iter()
         .filter(|j| j.job.id.starts_with(query))
         .collect();
+    if prefix_matches.len() > 1 {
+        let names: Vec<_> = prefix_matches
+            .iter()
+            .map(|job| job.job.name.as_deref().unwrap_or(&job.job.id))
+            .collect();
+        return Err(CoreError::AmbiguousJob(names.join(", ")));
+    }
     if prefix_matches.len() == 1 {
         return Ok(Some(prefix_matches[0].clone()));
     }

@@ -322,14 +322,15 @@ impl Store {
     /// Returns `StoreError::JobNotFound` if no job with that ID exists,
     /// or `StoreError::Database` on `SQLite` errors.
     pub fn delete_job(&self, id: &str) -> Result<(), StoreError> {
-        let count = self
-            .conn
-            .execute("DELETE FROM jobs WHERE id = ?1", params![id])?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM runs WHERE job_id = ?1", params![id])?;
+        let count = tx.execute("DELETE FROM jobs WHERE id = ?1", params![id])?;
         if count == 0 {
             return Err(StoreError::JobNotFound {
                 name: id.to_string(),
             });
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -794,9 +795,9 @@ mod tests {
 
         store.delete_job("aaaaaaaa").unwrap();
 
-        // Runs persist independently (no FK) — queried by job_id
+        // Runs are cleaned up when deleting the owning job.
         let runs = store.list_runs("aaaaaaaa", 10).unwrap();
-        assert_eq!(runs.len(), 1);
+        assert!(runs.is_empty());
     }
 
     #[test]
