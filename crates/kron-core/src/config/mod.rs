@@ -969,4 +969,21 @@ on_silence = "{dur}"
             );
         }
     }
+
+    #[test]
+    fn test_find_job_ambiguous_prefix_returns_error() {
+        let base = generate_short_id();
+        let prefix = &base[..4];
+        let id1 = format!("{prefix}aa11");
+        let id2 = format!("{prefix}bb22");
+
+        save_job(&sample_config(&id1)).unwrap();
+        save_job(&sample_config(&id2)).unwrap();
+
+        let result = find_job(prefix);
+        assert!(matches!(result, Err(CoreError::AmbiguousJob(_))));
+
+        delete_job_file(&id1).unwrap();
+        delete_job_file(&id2).unwrap();
+    }
 }

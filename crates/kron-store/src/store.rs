@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use rusqlite_migration::{M, Migrations};
 
 use crate::error::StoreError;
@@ -323,7 +323,27 @@ impl Store {
     /// or `StoreError::Database` on `SQLite` errors.
     pub fn delete_job(&self, id: &str) -> Result<(), StoreError> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM runs WHERE job_id = ?1", params![id])?;
+        let job_name: Option<Option<String>> = tx
+            .query_row("SELECT name FROM jobs WHERE id = ?1", params![id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        let Some(job_name) = job_name else {
+            return Err(StoreError::JobNotFound {
+                name: id.to_string(),
+            });
+        };
+
+        if let Some(name) = job_name {
+            tx.execute(
+                "DELETE FROM runs
+                 WHERE job_id = ?1 OR job_id = ?2 OR job_name = ?2",
+                params![id, name],
+            )?;
+        } else {
+            tx.execute("DELETE FROM runs WHERE job_id = ?1", params![id])?;
+        }
+
         let count = tx.execute("DELETE FROM jobs WHERE id = ?1", params![id])?;
         if count == 0 {
             return Err(StoreError::JobNotFound {
@@ -796,6 +816,37 @@ mod tests {
         store.delete_job("aaaaaaaa").unwrap();
 
         // Runs are cleaned up when deleting the owning job.
+        let runs = store.list_runs("aaaaaaaa", 10).unwrap();
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_delete_job_cleans_legacy_runs_keyed_by_name() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", Some("backup"));
+        store.insert_job(&job).unwrap();
+
+        let mut run = make_run(&job, RunStatus::Success);
+        run.job_id = "backup".to_string();
+        store.insert_run(&run).unwrap();
+
+        store.delete_job("aaaaaaaa").unwrap();
+
+        let runs = store.list_runs("backup", 10).unwrap();
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_delete_job_without_name_succeeds() {
+        let store = Store::open_in_memory().unwrap();
+        let job = make_job("aaaaaaaa", None);
+        store.insert_job(&job).unwrap();
+
+        let run = make_run(&job, RunStatus::Success);
+        store.insert_run(&run).unwrap();
+
+        store.delete_job("aaaaaaaa").unwrap();
+
         let runs = store.list_runs("aaaaaaaa", 10).unwrap();
         assert!(runs.is_empty());
     }

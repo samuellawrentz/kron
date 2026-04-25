@@ -8,7 +8,7 @@ pub fn execute(query: Option<&str>, count: usize) -> Result<()> {
     if let Some(query) = query {
         // Single-job view: resolve by config, or fall back to querying the store
         // directly (handles --once jobs whose config was auto-removed).
-        let (job_id, display) = match config::find_job(query).ok().flatten() {
+        let (job_id, display) = match config::find_job(query)? {
             Some(cfg) => {
                 let d = cfg.job.name.clone().unwrap_or_else(|| cfg.job.id.clone());
                 (cfg.job.id, d)

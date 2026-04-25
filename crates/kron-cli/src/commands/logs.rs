@@ -2,13 +2,21 @@ use anyhow::{Context, Result, bail};
 use kron_core::config;
 use kron_store::Store;
 
+fn validate_run_number(run_number: usize) -> Result<()> {
+    if run_number == 0 {
+        bail!("run number must be >= 1")
+    }
+    Ok(())
+}
+
 pub fn execute(query: Option<&str>, run_number: usize) -> Result<()> {
+    validate_run_number(run_number)?;
     let store = Store::open(&config::db_path()).context("failed to open database")?;
 
     let run = if let Some(query) = query {
         // Resolve by config, or fall back to querying the store directly
         // (handles --once jobs whose config was auto-removed).
-        let (job_id, display) = match config::find_job(query).ok().flatten() {
+        let (job_id, display) = match config::find_job(query)? {
             Some(cfg) => {
                 let d = cfg.job.name.clone().unwrap_or_else(|| cfg.job.id.clone());
                 (cfg.job.id, d)
@@ -74,4 +82,19 @@ pub fn execute(query: Option<&str>, run_number: usize) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_run_number_rejects_zero() {
+        assert!(validate_run_number(0).is_err());
+    }
+
+    #[test]
+    fn test_validate_run_number_accepts_positive() {
+        assert!(validate_run_number(1).is_ok());
+    }
 }

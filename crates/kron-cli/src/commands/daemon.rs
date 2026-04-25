@@ -4,6 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::process::Command as StdCommand;
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -309,6 +310,32 @@ fn write_pid(lock_file: &mut File, pid: u32) -> Result<()> {
     Ok(())
 }
 
+fn wait_for_pid_file(pid_path: &Path, child: &mut std::process::Child) -> Result<()> {
+    let timeout = Duration::from_secs(3);
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if let Ok(pid_str) = std::fs::read_to_string(pid_path)
+            && pid_str.trim().parse::<u32>().is_ok()
+        {
+            return Ok(());
+        }
+
+        if let Some(status) = child.try_wait().context("failed to poll daemon process")? {
+            anyhow::bail!("daemon failed to start (exit status: {status})");
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "daemon started but PID file was not created within {}ms",
+                timeout.as_millis()
+            );
+        }
+
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 pub fn stop() -> Result<()> {
     let pid_path = kron_core::config::data_dir().join("daemon.pid");
     let pid_str =
@@ -349,7 +376,13 @@ pub async fn execute(foreground: bool) -> Result<()> {
         let data_dir = kron_core::config::data_dir();
         std::fs::create_dir_all(&data_dir).context("failed to create data directory")?;
         let pid_path = data_dir.join("daemon.pid");
-        let mut pid_lock = acquire_pid_lock(&pid_path)?;
+
+        // Best-effort pre-check; foreground daemon acquires the authoritative lock.
+        if let Some(pid) = is_daemon_running() {
+            anyhow::bail!(
+                "kron daemon is already running (pid {pid}). Stop it first with 'kron daemon stop'."
+            );
+        }
 
         // Open a log file for daemon output
         let log_path = data_dir.join("daemon.log");
@@ -359,7 +392,7 @@ pub async fn execute(foreground: bool) -> Result<()> {
             .try_clone()
             .context("failed to clone log file handle")?;
 
-        let child = StdCommand::new(exe)
+        let mut child = StdCommand::new(exe)
             .args(["daemon", "start", "--foreground"])
             .stdout(log_file)
             .stderr(stderr_file)
@@ -368,9 +401,7 @@ pub async fn execute(foreground: bool) -> Result<()> {
             .context("failed to start daemon process")?;
 
         let pid = child.id();
-
-        // Save PID file for later use
-        write_pid(&mut pid_lock, pid)?;
+        wait_for_pid_file(&pid_path, &mut child)?;
 
         println!("kron daemon started (pid {pid})");
         println!("  Logs: {}", log_path.display());
