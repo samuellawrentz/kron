@@ -6,3 +6,6 @@
 *.db
 .omc/
 .cache/
+.claude/
+docs/screenshots/
+fix.md

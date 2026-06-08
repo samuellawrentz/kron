@@ -778,7 +778,7 @@ dependencies = [
 
 [[package]]
 name = "kron"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "kron-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "chrono",
  "croner",
@@ -822,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "kron-store"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "chrono",
  "rusqlite",
