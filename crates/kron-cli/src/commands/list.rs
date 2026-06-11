@@ -11,7 +11,10 @@ pub fn execute() -> Result<()> {
     }
 
     let store = Store::open(&config::db_path()).context("failed to open database")?;
-    let run_counts = store.count_all_runs().unwrap_or_default();
+    let run_counts = store.count_all_runs().unwrap_or_else(|e| {
+        eprintln!("warning: could not read run counts: {e}");
+        std::collections::HashMap::default()
+    });
 
     println!(
         "{:<10} {:<20} {:<8} {:<8} {:<25} COMMAND",

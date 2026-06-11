@@ -35,7 +35,7 @@ fn shell_quote_join(args: &[String]) -> String {
 /// converting from a human-readable English description via `english-to-cron`.
 /// Returns the resolved cron expression and an optional original English input
 /// (present only when a conversion was performed).
-fn resolve_schedule(schedule: &str) -> Result<(String, Option<String>)> {
+pub(crate) fn resolve_schedule(schedule: &str) -> Result<(String, Option<String>)> {
     // Try as a direct cron expression first.
     let cron_parse_err = match Cron::new(schedule).parse() {
         Ok(_) => return Ok((schedule.to_owned(), None)),
@@ -101,23 +101,13 @@ pub fn execute(
     let job_id = generate_short_id();
 
     let env = if capture_env {
-        let mut env_map = std::collections::HashMap::new();
-        for (key, value) in std::env::vars() {
-            env_map.insert(key, value);
-        }
-        Some(env_map)
+        Some(std::env::vars().collect())
     } else {
         // Always capture PATH so jobs find the same binaries the user had at
         // creation time — regardless of how the daemon's shell is configured.
-        let mut env_map = std::collections::HashMap::new();
-        if let Ok(path) = std::env::var("PATH") {
-            env_map.insert("PATH".to_string(), path);
-        }
-        if env_map.is_empty() {
-            None
-        } else {
-            Some(env_map)
-        }
+        std::env::var("PATH")
+            .ok()
+            .map(|path| std::collections::HashMap::from([("PATH".to_string(), path)]))
     };
 
     // Save TOML config file — TOML is the single source of truth for job definitions.

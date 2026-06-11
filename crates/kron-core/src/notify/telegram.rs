@@ -12,13 +12,15 @@ pub async fn send(
     body: &str,
 ) -> Result<(), CoreError> {
     let url = format!("https://api.telegram.org/bot{token}/sendMessage");
-    let text = format!("*{subject}*\n{body}");
+    // Send as plain text (no parse_mode): job subjects/output routinely contain
+    // Markdown metacharacters (* _ ` [ ]) and unbalanced markup, which makes the
+    // Telegram API reject the message with a 400 under "Markdown".
+    let text = format!("{subject}\n{body}");
     let resp = client
         .post(&url)
         .json(&serde_json::json!({
             "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown"
+            "text": text
         }))
         .send()
         .await

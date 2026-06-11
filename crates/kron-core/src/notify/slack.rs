@@ -10,7 +10,9 @@ pub async fn send(
     subject: &str,
     body: &str,
 ) -> Result<(), CoreError> {
-    let text = format!("*{subject}*\n{body}");
+    // Slack requires &, <, > to be HTML-escaped in message text; job output is
+    // untrusted, so escape it and keep bolding only on the (kron-generated) subject.
+    let text = format!("*{}*\n{}", escape_slack(subject), escape_slack(body));
     let resp = client
         .post(webhook_url)
         .json(&serde_json::json!({ "text": text }))
@@ -24,4 +26,11 @@ pub async fn send(
         )));
     }
     Ok(())
+}
+
+/// Escape the three characters Slack treats specially in message text.
+fn escape_slack(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }

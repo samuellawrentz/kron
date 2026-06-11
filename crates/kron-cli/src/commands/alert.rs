@@ -35,8 +35,10 @@ pub fn list() -> Result<()> {
                 println!("  {}. Telegram (chat_id: {chat_id})", i + 1);
             }
             AlertProvider::Slack { webhook_url } => {
-                let masked = if webhook_url.len() > 30 {
-                    format!("{}...", &webhook_url[..30])
+                // char-based truncation avoids panicking on a non-ASCII URL
+                // where byte 30 lands mid-character.
+                let masked = if webhook_url.chars().count() > 30 {
+                    format!("{}...", webhook_url.chars().take(30).collect::<String>())
                 } else {
                     webhook_url.clone()
                 };

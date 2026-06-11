@@ -69,15 +69,13 @@ pub fn parse_crontab(contents: &str) -> Vec<CrontabEntry> {
             continue;
         }
 
-        // Standard 5-field cron line: min hour dom month dow command
-        let parts: Vec<&str> = line.splitn(6, char::is_whitespace).collect();
-        if parts.len() < 6 {
+        // Standard 5-field cron line: min hour dom month dow command.
+        // Split on runs of whitespace so consecutive spaces/tabs don't yield
+        // empty fields and shift the command into the schedule.
+        let Some((schedule, raw_command)) = split_cron_fields(line) else {
             continue; // Not enough fields.
-        }
-
-        let schedule = parts[..5].join(" ");
-        let raw_command = parts[5].trim();
-        let (command, comment) = split_inline_comment(raw_command);
+        };
+        let (command, comment) = split_inline_comment(raw_command.trim());
 
         if !command.is_empty() {
             entries.push(CrontabEntry {
@@ -89,6 +87,24 @@ pub fn parse_crontab(contents: &str) -> Vec<CrontabEntry> {
     }
 
     entries
+}
+
+/// Split a cron line into its 5 schedule fields and the command remainder.
+/// Splits on runs of whitespace (spaces or tabs) and preserves the command
+/// text verbatim after the 5th field. Returns None if there are fewer than
+/// 5 fields followed by a non-empty command.
+fn split_cron_fields(line: &str) -> Option<(String, &str)> {
+    let mut rest = line.trim_start();
+    let mut fields = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let end = rest.find(char::is_whitespace)?;
+        fields.push(&rest[..end]);
+        rest = rest[end..].trim_start();
+    }
+    if rest.is_empty() {
+        return None;
+    }
+    Some((fields.join(" "), rest))
 }
 
 /// Split a command string on an unquoted `#` to extract an inline comment.
@@ -105,7 +121,7 @@ fn split_inline_comment(s: &str) -> (String, Option<String>) {
             b'"' if !in_single => in_double = !in_double,
             b'#' if !in_single && !in_double => {
                 // Only treat as comment if preceded by whitespace.
-                if i > 0 && bytes[i - 1] == b' ' {
+                if i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
                     let cmd = s[..i].trim().to_string();
                     let comment = s[i + 1..].trim().to_string();
                     let comment = if comment.is_empty() {
@@ -158,6 +174,17 @@ mod tests {
         assert_eq!(entries[0].schedule, "0 2 * * *");
         assert_eq!(entries[0].command, "/usr/bin/backup.sh");
         assert!(entries[0].comment.is_none());
+    }
+
+    #[test]
+    fn test_parse_consecutive_whitespace_and_tabs() {
+        // Multiple spaces/tabs between fields must not shift the command into
+        // the schedule or create empty fields.
+        let input = "0  2 *\t* *   /usr/bin/backup.sh --flag";
+        let entries = parse_crontab(input);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].schedule, "0 2 * * *");
+        assert_eq!(entries[0].command, "/usr/bin/backup.sh --flag");
     }
 
     #[test]

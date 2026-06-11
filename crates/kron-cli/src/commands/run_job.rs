@@ -44,14 +44,28 @@ pub async fn execute(query: &str) -> Result<()> {
 
     // Execute, preferring .sh script if available
     let script = config::script_path(&job.id);
-    let output = runner::execute_command_or_script(
+    let output = match runner::execute_command_or_script(
         &job.command,
         Some(script.as_path()),
         job.working_dir.as_deref(),
         timeout,
         job.env.as_ref(),
     )
-    .await?;
+    .await
+    {
+        Ok(output) => output,
+        Err(err) => {
+            // Don't leave the run stuck in 'Running' on timeout/spawn failure.
+            let failed = RunRecord {
+                finished_at: Some(Utc::now()),
+                stderr: err.to_string(),
+                status: RunStatus::Failed,
+                ..run
+            };
+            let _ = store.update_run(&failed);
+            return Err(err.into());
+        }
+    };
 
     // Record result
     let status = if output.success {

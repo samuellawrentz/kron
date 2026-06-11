@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use croner::Cron;
 
 use kron_core::config::{self, validate_job_name};
 use kron_core::scheduler::parse_duration;
@@ -39,16 +38,15 @@ pub fn execute(args: EditArgs<'_>) -> Result<()> {
 
     let mut changes: Vec<String> = Vec::new();
 
-    // Validate and apply schedule
+    // Validate and apply schedule. Resolve through the same path as `add` so
+    // human-readable inputs (e.g. "every day at 2am") are accepted identically.
     if let Some(ref sched) = args.schedule {
-        Cron::new(sched)
-            .parse()
-            .map_err(|e| anyhow::anyhow!("invalid cron expression '{sched}': {e}"))?;
+        let (resolved, _english) = super::add::resolve_schedule(sched)?;
         changes.push(format!(
             "schedule: \"{}\" -> \"{}\"",
-            job.job.schedule, sched
+            job.job.schedule, resolved
         ));
-        job.job.schedule.clone_from(sched);
+        job.job.schedule = resolved;
     }
 
     // Apply command
@@ -61,8 +59,10 @@ pub fn execute(args: EditArgs<'_>) -> Result<()> {
     if let Some(ref new_name) = args.name {
         validate_job_name(new_name)?;
 
-        // Check for name collision
+        // Check for name collision — match strictly on name, not find_job's
+        // id-prefix resolution (which would flag names that prefix another job's id).
         if let Some(existing) = config::find_job(new_name).context("failed to check name")?
+            && existing.job.name.as_deref() == Some(new_name.as_str())
             && existing.job.id != job.job.id
         {
             anyhow::bail!(

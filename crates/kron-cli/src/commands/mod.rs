@@ -177,7 +177,9 @@ pub enum DaemonCommand {
 pub(super) fn truncate_display(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {
         None => s.to_string(),
-        Some((idx, _)) => format!("{}…", &s[..s.floor_char_boundary(idx.saturating_sub(1))]),
+        // `idx` is the byte offset of the (max)-th char and is already a valid
+        // char boundary, so keep exactly `max` chars before the ellipsis.
+        Some((idx, _)) => format!("{}…", &s[..idx]),
     }
 }
 
